@@ -1,0 +1,163 @@
+<% const st = (typeof settings !== 'undefined' && settings) ? settings : { siteTitle: 'OnlineWiki', siteTagline: 'Internal knowledge base and collaborative wiki' }; %>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="<%= st.siteTagline %>" />
+  <title><%= typeof title !== 'undefined' && title ? title : st.siteTitle %></title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/style.css" />
+  <%- typeof styles !== 'undefined' ? styles : '' %>
+</head>
+<body>
+
+  <!-- ═══ Sidebar ═══════════════════════════════════════════════════════════ -->
+  <aside class="sidebar" id="sidebar" aria-label="Site navigation">
+    <div class="sidebar-header">
+      <a href="/" class="sidebar-logo" aria-label="Wiki home">
+        <span class="logo-icon" aria-hidden="true">📚</span>
+        <span class="logo-text"><%= st.siteTitle %></span>
+      </a>
+    </div>
+
+    <div class="sidebar-search-wrap">
+      <svg class="sidebar-search-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="search" id="sidebarSearch" class="sidebar-search-input" placeholder="Filter pages…" autocomplete="off" aria-label="Filter sidebar pages" />
+    </div>
+
+    <nav class="sidebar-nav" aria-label="Main navigation">
+      <a href="/" class="sidebar-link sidebar-link-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        Home
+      </a>
+      <a href="/uploads" class="sidebar-link sidebar-link-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        Documents
+      </a>
+      <% if (user && user.role === 'administrator') { %>
+      <a href="/admin/users" class="sidebar-link sidebar-link-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        User Management
+      </a>
+      <a href="/admin/settings" class="sidebar-link sidebar-link-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        Settings
+      </a>
+      <% } %>
+      <% if (user) { %>
+      <a href="/profile" class="sidebar-link sidebar-link-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        My Profile
+      </a>
+      <% } %>
+      <a href="/pages/new" class="sidebar-link sidebar-link-icon sidebar-link-new">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        New Page
+      </a>
+
+      <div class="sidebar-section-label">Pages</div>
+
+      <div id="sidebarPageList">
+        <% if (navFlat && navFlat.length > 0) { %>
+          <% navFlat.forEach(p => { %>
+            <div class="tree-node"
+                 data-slug="<%= p.slug %>"
+                 data-parent="<%= p.parent || '' %>"
+                 data-depth="<%= p.depth %>"
+                 style="<%= p.depth === 0 ? '' : 'display:none' %>">
+              <div class="tree-node-row" style="padding-left:calc(0.6rem + <%= p.depth %> * 1.1rem)">
+                <% if (p.hasChildren) { %>
+                  <button class="tree-toggle-btn"
+                          data-slug="<%= p.slug %>"
+                          aria-label="Expand <%= p.title %>"
+                          aria-expanded="false">
+                    <svg class="tree-toggle-icon" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                  </button>
+                <% } else { %>
+                  <span class="tree-leaf-dot" aria-hidden="true"></span>
+                <% } %>
+                <a href="/pages/<%= p.slug %>"
+                   class="tree-link"
+                   data-search-term="<%= p.title.toLowerCase() %>"
+                   title="<%= p.title %>">
+                  <span class="tree-link-text"><%= p.title %></span>
+                </a>
+              </div>
+            </div>
+          <% }); %>
+        <% } else { %>
+          <p class="sidebar-empty">No pages yet.<br/><a href="/pages/new">Create the first one →</a></p>
+        <% } %>
+      </div>
+    </nav>
+  </aside>
+
+  <!-- ═══ Overlay (mobile) ══════════════════════════════════════════════════ -->
+  <div class="sidebar-overlay" id="sidebarOverlay" aria-hidden="true"></div>
+
+  <!-- ═══ Main wrapper ══════════════════════════════════════════════════════ -->
+  <div class="main-wrapper" id="mainWrapper">
+
+    <!-- Top bar -->
+    <header class="topbar" role="banner">
+      <button class="topbar-toggle" id="sidebarToggle" aria-label="Toggle sidebar" aria-expanded="false" aria-controls="sidebar">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+
+      <div class="topbar-spacer"></div>
+
+      <div class="topbar-right">
+        <% if (user) {
+             const av = (typeof user.avatar === 'string' && user.avatar.length > 0 && /\.(png|jpg|jpeg|webp)$/i.test(user.avatar)) ? '/avatars/' + encodeURIComponent(user.avatar) : '';
+             const initial = (user.displayName || user.username || 'U')[0].toUpperCase();
+        %>
+          <a href="/profile" class="user-chip user-chip-link" title="<%= user.email ? user.email + ' — ' : '' %>Open my profile">
+            <div class="avatar avatar-md" aria-hidden="true">
+              <% if (av) { %>
+                <img src="<%= av %>" alt="" referrerpolicy="no-referrer" />
+              <% } else { %>
+                <span class="avatar-letter"><%= initial %></span>
+              <% } %>
+            </div>
+            <span class="user-name"><%= user.displayName || user.username %></span>
+          </a>
+          <form action="/logout" method="POST" style="margin:0">
+            <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+            <button type="submit" class="btn btn-ghost btn-sm" id="logoutBtn">Sign Out</button>
+          </form>
+        <% } %>
+      </div>
+    </header>
+
+    <!-- Flash messages -->
+    <% if (flash && flash.error && flash.error.length) { %>
+      <div class="flash flash-error" role="alert" aria-live="assertive">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <%= flash.error[0] %>
+        <button class="flash-close" onclick="this.parentElement.remove()" aria-label="Dismiss">×</button>
+      </div>
+    <% } %>
+    <% if (flash && flash.success && flash.success.length) { %>
+      <div class="flash flash-success" role="status" aria-live="polite">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+        <%= flash.success[0] %>
+        <button class="flash-close" onclick="this.parentElement.remove()" aria-label="Dismiss">×</button>
+      </div>
+    <% } %>
+
+    <!-- Page body -->
+    <main class="content" id="mainContent" role="main">
+      <%- body %>
+    </main>
+
+  </div><!-- /.main-wrapper -->
+
+  <script src="/js/app.js"></script>
+  <%- (typeof script  !== 'undefined' && script)  ? script  : '' %>
+  <%- (typeof style   !== 'undefined' && style)   ? style   : '' %>
+  <%- (typeof meta    !== 'undefined' && meta)    ? meta    : '' %>
+</body>
+</html>

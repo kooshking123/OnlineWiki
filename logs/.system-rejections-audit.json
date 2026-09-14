@@ -1,0 +1,20 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 30
+    },
+    "auditLog": "C:\\Users\\leeda\\OneDrive\\Dev\\Antigravity\\OnlineHelp\\logs\\.system-rejections-audit.json",
+    "files": [
+        {
+            "date": 1788399230848,
+            "name": "C:\\Users\\leeda\\OneDrive\\Dev\\Antigravity\\OnlineHelp\\logs\\system-rejections-2026-09-03.log",
+            "hash": "dd76dff9ae5f96f966cdd76739f3f14aea1a65de2edb4f83bde286b5b1731f6e"
+        },
+        {
+            "date": 1788399398129,
+            "name": "c:\\Users\\leeda\\OneDrive\\Dev\\Antigravity\\OnlineHelp\\logs\\system-rejections-2026-09-03.log",
+            "hash": "ff7a0d1c3e76d25ab2c3ccf68eff086d17c1edbbed83b0b93faec78b1bcc201e"
+        }
+    ],
+    "hashType": "sha256"
+}

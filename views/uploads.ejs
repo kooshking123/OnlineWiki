@@ -1,0 +1,271 @@
+<!-- Header -->
+<div class="view-header">
+  <div class="view-header-left">
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="/">Home</a>
+      <span class="breadcrumb-sep" aria-hidden="true">/</span>
+      <span aria-current="page">Documents</span>
+    </nav>
+    <h1 class="view-title">Documents</h1>
+    <p class="view-subtitle">
+      <%= files.length %> file<%= files.length !== 1 ? 's' : '' %> stored
+    </p>
+  </div>
+</div>
+
+<!-- ─── Upload drop zone ─────────────────────────────────────────────────── -->
+<section class="upload-zone-section" aria-labelledby="uploadHeading">
+  <h2 class="upload-zone-heading" id="uploadHeading">Upload a Document</h2>
+  <form action="/uploads" method="POST" enctype="multipart/form-data" id="uploadForm">
+    <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+    <div class="drop-zone" id="dropZone" tabindex="0" role="button" aria-label="Click or drag files here to upload">
+      <div class="drop-zone-inner">
+        <div class="drop-zone-icon" aria-hidden="true">
+          <svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        </div>
+        <p class="drop-zone-text" id="dropZoneText">Drag &amp; drop files here</p>
+        <p class="drop-zone-subtext">PDF, Word, Excel, PowerPoint, images, ZIP and more — up to 50 MB</p>
+        <label class="btn btn-secondary" for="fileInput" id="chooseFileLabel">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Choose File
+        </label>
+        <input
+          type="file"
+          id="fileInput"
+          name="file"
+          class="visually-hidden"
+          accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.png,.jpg,.jpeg,.gif,.svg,.zip,.7z,.rar"
+        />
+      </div>
+      <div class="drop-zone-selected hidden" id="fileSelectedBanner">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+        <span id="selectedFileName">No file</span>
+        <button type="button" class="btn-text-danger" id="clearFileBtn" aria-label="Clear selected file">Remove</button>
+      </div>
+    </div>
+    <div id="uploadActions" class="upload-actions">
+      <button type="submit" class="btn btn-primary" id="uploadBtn">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Upload File
+      </button>
+    </div>
+  </form>
+</section>
+
+<!-- ─── File list ─────────────────────────────────────────────────────────── -->
+<section class="files-section" aria-labelledby="filesHeading">
+  <div class="files-section-header">
+    <h2 class="files-section-title" id="filesHeading">Uploaded Files</h2>
+    <% if (files.length > 0) { %>
+      <div class="files-search-wrap">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="search" id="fileSearch" class="files-search-input" placeholder="Search files…" aria-label="Search files" />
+      </div>
+    <% } %>
+  </div>
+
+  <% if (files.length === 0) { %>
+    <div class="empty-state">
+      <div class="empty-state-icon" aria-hidden="true">📁</div>
+      <h3 class="empty-state-title">No files yet</h3>
+      <p class="empty-state-text">Use the upload area above to add documents.</p>
+    </div>
+  <% } else { %>
+    <div class="files-table-wrap">
+      <table class="files-table" id="filesTable" aria-label="Uploaded files">
+        <thead>
+          <tr>
+            <th scope="col">File</th>
+            <th scope="col">Size</th>
+            <th scope="col">Uploaded</th>
+            <th scope="col" class="col-actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% files.forEach(f => { %>
+            <tr class="file-row" data-search-val="<%= f.originalName.toLowerCase() %>">
+              <td class="file-name-cell">
+                <span class="file-type-icon" aria-hidden="true"><%= f.icon %></span>
+                <div class="file-name-info">
+                  <span class="file-display-name" title="<%= f.originalName %>"><%= f.originalName %></span>
+                  <span class="file-ext-badge"><%= f.ext %></span>
+                </div>
+              </td>
+              <td class="file-size-cell"><%= f.size %></td>
+              <td class="file-date-cell">
+                <time datetime="<%= f.uploadedAt.toISOString() %>">
+                  <%= new Date(f.uploadedAt).toLocaleDateString(undefined, {dateStyle:'medium'}) %>
+                </time>
+              </td>
+              <td class="file-actions-cell">
+                <a
+                  href="/uploads/download/<%= f.name %>"
+                  class="btn btn-sm btn-secondary"
+                  download="<%= f.originalName %>"
+                  aria-label="Download <%= f.originalName %>"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Download
+                </a>
+                <button
+                  class="btn btn-sm btn-danger delete-file-btn"
+                  data-filename="<%= f.name %>"
+                  data-displayname="<%= f.originalName %>"
+                  aria-label="Delete <%= f.originalName %>"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                  Delete
+                </button>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+    <div class="empty-state hidden" id="noFileResults" aria-live="polite">
+      <div class="empty-state-icon" aria-hidden="true">🔍</div>
+      <p class="empty-state-text">No files match your search.</p>
+    </div>
+  <% } %>
+</section>
+
+<!-- ═══ Delete file modal ═══════════════════════════════════════════════════ -->
+<div class="modal-overlay hidden" id="deleteFileModal" role="dialog" aria-modal="true" aria-labelledby="deleteFileModalTitle">
+  <div class="modal">
+    <div class="modal-danger-icon" aria-hidden="true">
+      <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+    </div>
+    <h2 class="modal-title" id="deleteFileModalTitle">Delete File</h2>
+    <p class="modal-body">
+      Are you sure you want to delete <strong id="deleteFileDisplayName"></strong>?<br />
+      This will also remove it from any pages it's attached to.
+    </p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="cancelDeleteFileBtn">Cancel</button>
+      <form id="deleteFileForm" method="POST" style="margin:0">
+        <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+        <button type="submit" class="btn btn-danger">Delete File</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── File search ────────────────────────────────────────────────────────────
+  const fileSearch = document.getElementById('fileSearch');
+  if (fileSearch) {
+    fileSearch.addEventListener('input', function () {
+      const q = this.value.toLowerCase();
+      let visible = 0;
+      document.querySelectorAll('.file-row').forEach(row => {
+        const match = !q || row.dataset.searchVal.includes(q);
+        row.classList.toggle('hidden', !match);
+        if (match) visible++;
+      });
+      document.getElementById('noFileResults').classList.toggle('hidden', visible > 0);
+    });
+  }
+
+  // ── Drop zone ──────────────────────────────────────────────────────────────
+  const dropZone      = document.getElementById('dropZone');
+  const fileInput     = document.getElementById('fileInput');
+  const dropText      = document.getElementById('dropZoneText');
+  const selectedBanner = document.getElementById('fileSelectedBanner');
+  const selectedName  = document.getElementById('selectedFileName');
+  const clearBtn      = document.getElementById('clearFileBtn');
+  const uploadActions = document.getElementById('uploadActions');
+
+  function setFile(file) {
+    if (!file) return;
+    selectedName.textContent = file.name;
+    selectedBanner.classList.remove('hidden');
+    uploadActions.classList.remove('hidden');
+    dropZone.classList.add('drop-zone-has-file');
+  }
+
+  function clearFile() {
+    fileInput.value = '';
+    selectedBanner.classList.add('hidden');
+    uploadActions.classList.add('hidden');
+    dropZone.classList.remove('drop-zone-has-file');
+    dropText.textContent = 'Drag & drop files here';
+  }
+
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files[0]) setFile(fileInput.files[0]);
+  });
+  clearBtn.addEventListener('click', clearFile);
+
+  ['dragover','dragenter'].forEach(ev => dropZone.addEventListener(ev, e => {
+    e.preventDefault(); dropZone.classList.add('drop-zone-drag');
+  }));
+  ['dragleave','drop'].forEach(ev => dropZone.addEventListener(ev, e => {
+    e.preventDefault(); dropZone.classList.remove('drop-zone-drag');
+  }));
+  dropZone.addEventListener('drop', e => {
+    const f = e.dataTransfer.files[0];
+    if (f) {
+      const dt = new DataTransfer();
+      dt.items.add(f);
+      fileInput.files = dt.files;
+      setFile(f);
+    }
+  });
+  dropZone.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+  });
+
+  // ── Upload form submit guard ──────────────────────────────────────────────
+  const uploadForm = document.getElementById('uploadForm');
+  const uploadBtn = document.getElementById('uploadBtn');
+  if (uploadForm && uploadBtn) {
+    // Browser-native submit via Enter key / submit click is fine, but guard
+    // against double-submit and make sure the user selected a file first so
+    // there's no round-trip flash for "Please select a file".
+    uploadForm.addEventListener('submit', function (e) {
+      if (this.dataset.submitting === '1') { e.preventDefault(); return; }
+      const f = fileInput.files?.[0];
+      if (!f) {
+        e.preventDefault();
+        dropText.textContent = 'Select a file first, then click Upload.';
+        dropZone.classList.add('drop-zone-error');
+        setTimeout(() => { dropZone.classList.remove('drop-zone-error'); }, 1200);
+        return;
+      }
+      if (f.size > 50 * 1024 * 1024) {
+        e.preventDefault();
+        alert('File too large. Maximum size is 50 MB.');
+        return;
+      }
+      this.dataset.submitting = '1';
+      uploadBtn.disabled = true;
+      uploadBtn.classList.add('is-loading');
+      uploadBtn.firstChild && uploadBtn.firstChild.nodeType === 1 && (uploadBtn.firstChild.style.opacity = '0.5');
+    });
+  }
+  const deleteFileModal   = document.getElementById('deleteFileModal');
+  const cancelDeleteFileBtn = document.getElementById('cancelDeleteFileBtn');
+
+  function openDeleteModal(filename, displayName) {
+    document.getElementById('deleteFileDisplayName').textContent = displayName;
+    document.getElementById('deleteFileForm').action = `/uploads/delete/${encodeURIComponent(filename)}`;
+    deleteFileModal.classList.remove('hidden');
+    cancelDeleteFileBtn.focus();
+  }
+
+  // Event delegation: any .delete-file-btn click reads data attributes safely
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('.delete-file-btn');
+    if (!btn) return;
+    e.preventDefault();
+    openDeleteModal(btn.dataset.filename || '', btn.dataset.displayname || '');
+  });
+
+  cancelDeleteFileBtn.addEventListener('click', () => deleteFileModal.classList.add('hidden'));
+  deleteFileModal.addEventListener('click', e => {
+    if (e.target === deleteFileModal) deleteFileModal.classList.add('hidden');
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') deleteFileModal.classList.add('hidden');
+  });
+</script>

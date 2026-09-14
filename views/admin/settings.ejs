@@ -1,0 +1,96 @@
+<!-- Header -->
+<div class="view-header">
+  <div class="view-header-left">
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="/">Home</a>
+      <span class="breadcrumb-sep" aria-hidden="true">/</span>
+      <span aria-current="page">Site Settings</span>
+    </nav>
+    <h1 class="view-title">Site Settings</h1>
+    <p class="view-subtitle">
+      Change branding and labels shown across the wiki. Takes effect immediately.
+    </p>
+  </div>
+</div>
+
+<%
+  const defs = {
+    siteTitle:    'OnlineWiki',
+    siteTagline:  'Internal knowledge base and collaborative wiki',
+    homeHeading:  'Wiki Home',
+    homeSubtitle: '{N} page{N_S}'
+  };
+  const s = (typeof settings === 'object' && settings) ? settings : defs;
+  const e = v => (v == null ? '' : String(v))
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+%>
+
+<form method="POST" action="/admin/settings" class="card settings-card" id="settingsForm" novalidate>
+  <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+
+  <div class="settings-section">
+    <h2 class="settings-section-title">Branding</h2>
+
+    <div class="form-group">
+      <label class="form-label" for="siteTitle">
+        Site title
+        <span class="form-hint">Shown in the sidebar header, browser tab, and login screen.</span>
+      </label>
+      <input type="text" id="siteTitle" name="siteTitle" class="form-input"
+        maxlength="80" required
+        value="<%= e(s.siteTitle || defs.siteTitle) %>" />
+    </div>
+
+    <div class="form-group">
+      <label class="form-label" for="siteTagline">
+        Site tagline
+        <span class="form-hint">Short description shown on the sign-in page and in the HTML meta description.</span>
+      </label>
+      <input type="text" id="siteTagline" name="siteTagline" class="form-input"
+        maxlength="200"
+        value="<%= e(s.siteTagline || defs.siteTagline) %>" />
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h2 class="settings-section-title">Home page</h2>
+
+    <div class="form-group">
+      <label class="form-label" for="homeHeading">
+        Home heading
+        <span class="form-hint">Large heading at the top of the home page.</span>
+      </label>
+      <input type="text" id="homeHeading" name="homeHeading" class="form-input"
+        maxlength="80" required
+        value="<%= e(s.homeHeading || defs.homeHeading) %>" />
+    </div>
+
+    <div class="form-group">
+      <label class="form-label" for="homeSubtitle">
+        Home subtitle
+        <span class="form-hint">
+          Text under the home heading. Use placeholders:
+          <code class="inline-code">{N}</code> = total page count,
+          <code class="inline-code">{N_S}</code> = plural &quot;s&quot; when N ≠ 1.
+        </span>
+      </label>
+      <input type="text" id="homeSubtitle" name="homeSubtitle" class="form-input"
+        maxlength="160"
+        value="<%= e(s.homeSubtitle || defs.homeSubtitle) %>" />
+    </div>
+  </div>
+
+  <div class="settings-actions">
+    <a href="/" class="btn btn-ghost">Cancel</a>
+    <button type="submit" class="btn btn-primary" id="saveSettingsBtn">
+      <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+      <span class="btn-label">Save changes</span>
+    </button>
+  </div>
+</form>
+
+<div class="admin-footer-note">
+  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+  Setting values are stored in <strong>data/settings.json</strong> (atomic write, no database).
+</div>

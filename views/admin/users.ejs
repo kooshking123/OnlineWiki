@@ -1,0 +1,544 @@
+<!-- Header -->
+<div class="view-header">
+  <div class="view-header-left">
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="/">Home</a>
+      <span class="breadcrumb-sep" aria-hidden="true">/</span>
+      <span aria-current="page">User Management</span>
+    </nav>
+    <h1 class="view-title">User Management</h1>
+    <p class="view-subtitle">
+      <%= users.length %> registered user<%= users.length !== 1 ? 's' : '' %>
+      &nbsp;·&nbsp;
+      Create <strong>local password-based accounts</strong> below, or manage accounts auto-registered via Active Directory.
+    </p>
+  </div>
+  <div class="view-header-right">
+    <button type="button" class="btn btn-primary" id="toggleCreateBtn" aria-controls="createLocalUserCard" aria-expanded="false">
+      <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+      <span class="btn-label">Create Local User</span>
+    </button>
+  </div>
+</div>
+
+<%
+  const e = v => (v == null ? '' : String(v))
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  const csrf = (typeof csrfToken !== 'undefined' ? csrfToken : '');
+%>
+
+<!-- Create Local User card -->
+<div class="card settings-card hidden" id="createLocalUserCard" style="margin-bottom: 2rem;">
+  <form method="POST" action="/admin/users/new" novalidate>
+    <input type="hidden" name="_csrf" value="<%= csrf %>" />
+    <div class="settings-section">
+      <h2 class="settings-section-title">Create Local Account</h2>
+      <p class="form-hint" style="margin-bottom: 1.25rem; color: var(--muted);">
+        Password-based accounts are stored securely in <strong>data/users.json</strong>
+        with scrypt key derivation. They work independently of Active Directory and are
+        useful for emergency access, external contractors, or when LDAP is unreachable.
+      </p>
+
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem 1.25rem;">
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" for="new_username">
+            Username <span style="color:var(--danger);">*</span>
+            <span class="form-hint">2–60 chars · letters, numbers, . _ - only</span>
+          </label>
+          <input type="text" id="new_username" name="username" class="form-input"
+            required minlength="2" maxlength="60"
+            pattern="[a-zA-Z0-9][a-zA-Z0-9._-]{1,59}"
+            autocomplete="off" />
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" for="new_displayName">
+            Display name <span style="color:var(--danger);">*</span>
+            <span class="form-hint">Shown in the sidebar and audit logs.</span>
+          </label>
+          <input type="text" id="new_displayName" name="displayName" class="form-input"
+            required maxlength="80" />
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" for="new_email">
+            Email
+            <span class="form-hint">Optional, used for display only.</span>
+          </label>
+          <input type="email" id="new_email" name="email" class="form-input"
+            maxlength="254" />
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" for="new_role">
+            Role <span style="color:var(--danger);">*</span>
+          </label>
+          <select id="new_role" name="role" class="form-input" required>
+            <option value="reader" selected>Reader — view &amp; download only</option>
+            <option value="editor">Editor — create &amp; edit pages, upload files</option>
+            <option value="administrator">Administrator — full access, user &amp; settings management</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" for="new_password">
+            Password <span style="color:var(--danger);">*</span>
+            <span class="form-hint">Minimum 8 characters. Longer is stronger.</span>
+          </label>
+          <input type="password" id="new_password" name="password" class="form-input"
+            required minlength="8" maxlength="256" autocomplete="new-password" />
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label class="form-label" for="new_confirmPassword">
+            Confirm password <span style="color:var(--danger);">*</span>
+          </label>
+          <input type="password" id="new_confirmPassword" name="confirmPassword" class="form-input"
+            required minlength="8" maxlength="256" autocomplete="new-password" />
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-actions">
+      <button type="button" class="btn btn-ghost" id="cancelCreateBtn">Cancel</button>
+      <button type="submit" class="btn btn-primary">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        <span class="btn-label">Create User</span>
+      </button>
+    </div>
+  </form>
+</div>
+
+<!-- Role legend -->
+<div class="admin-legend">
+  <div class="admin-legend-item">
+    <span class="role-badge role-badge-administrator">Administrator</span>
+    <span class="admin-legend-desc">Assign roles · Edit all pages · Upload files</span>
+  </div>
+  <div class="admin-legend-item">
+    <span class="role-badge role-badge-editor">Editor</span>
+    <span class="admin-legend-desc">Edit all pages · Upload files</span>
+  </div>
+  <div class="admin-legend-item">
+    <span class="role-badge role-badge-reader">Reader</span>
+    <span class="admin-legend-desc">Read pages · Download attachments</span>
+  </div>
+  <div class="admin-legend-item">
+    <span class="source-badge source-badge-local">Local</span>
+    <span class="admin-legend-desc">Password-based, works without LDAP</span>
+  </div>
+  <div class="admin-legend-item">
+    <span class="source-badge source-badge-ldap">LDAP</span>
+    <span class="admin-legend-desc">Active Directory auto-registered</span>
+  </div>
+  <div class="admin-legend-item">
+    <span class="source-badge source-badge-hybrid">Hybrid</span>
+    <span class="admin-legend-desc">Can log in via either LDAP or password</span>
+  </div>
+</div>
+
+<% if (users.length === 0) { %>
+  <div class="empty-state">
+    <div class="empty-state-icon" aria-hidden="true">👤</div>
+    <h2 class="empty-state-title">No registered users yet</h2>
+    <p class="empty-state-text">
+      Click <strong>Create Local User</strong> above to make a password-based account, or
+      have someone sign in via Active Directory and they'll appear here automatically.
+      The local admin account (<code class="inline-code"><%= e(process.env.LOCAL_ADMIN_USERNAME || 'admin') %></code>) is not listed here.
+    </p>
+  </div>
+<% } else { %>
+
+  <!-- User count summary -->
+  <div class="admin-summary">
+    <%
+      const counts = { administrator: 0, editor: 0, reader: 0 };
+      const sources = { local: 0, ldap: 0, hybrid: 0 };
+      users.forEach(u => {
+        if (counts[u.role] !== undefined) counts[u.role]++;
+        const src = u.passwordHash ? (u.source === 'ldap' ? 'hybrid' : (u.source || 'local')) : (u.source || 'ldap');
+        if (sources[src] !== undefined) sources[src]++;
+        else sources.ldap++;
+      });
+    %>
+    <div class="admin-summary-stat">
+      <span class="admin-summary-num"><%= counts.administrator %></span>
+      <span class="admin-summary-label">Administrator<%= counts.administrator !== 1 ? 's' : '' %></span>
+    </div>
+    <div class="admin-summary-sep" aria-hidden="true">·</div>
+    <div class="admin-summary-stat">
+      <span class="admin-summary-num"><%= counts.editor %></span>
+      <span class="admin-summary-label">Editor<%= counts.editor !== 1 ? 's' : '' %></span>
+    </div>
+    <div class="admin-summary-sep" aria-hidden="true">·</div>
+    <div class="admin-summary-stat">
+      <span class="admin-summary-num"><%= counts.reader %></span>
+      <span class="admin-summary-label">Reader<%= counts.reader !== 1 ? 's' : '' %></span>
+    </div>
+    <div class="admin-summary-sep" aria-hidden="true">·</div>
+    <div class="admin-summary-stat">
+      <span class="admin-summary-num"><%= sources.local + sources.hybrid %></span>
+      <span class="admin-summary-label">Local / Hybrid</span>
+    </div>
+    <div class="admin-summary-sep" aria-hidden="true">·</div>
+    <div class="admin-summary-stat">
+      <span class="admin-summary-num"><%= sources.ldap %></span>
+      <span class="admin-summary-label">LDAP-only</span>
+    </div>
+  </div>
+
+  <!-- Search -->
+  <div class="admin-search-wrap">
+    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="search" id="userSearch" class="admin-search-input"
+      placeholder="Search users…" autocomplete="off" aria-label="Search users" />
+  </div>
+
+  <!-- Users table -->
+  <div class="admin-table-wrap">
+    <table class="admin-table" id="usersTable" aria-label="Registered users">
+      <thead>
+        <tr>
+          <th scope="col">User</th>
+          <th scope="col">Username</th>
+          <th scope="col">Source</th>
+          <th scope="col">Last Login</th>
+          <th scope="col">Registered</th>
+          <th scope="col">Role</th>
+          <th scope="col" style="width: 16rem;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% users.forEach(u => { %>
+          <%
+            const isSelf = u.username === user.username;
+            const isEnvAdmin = typeof localAdminUsername === 'string' && localAdminUsername &&
+                               u.username.toLowerCase() === localAdminUsername.toLowerCase();
+            const isProtected = isSelf || isEnvAdmin;
+            const hasPwd = !!u.passwordHash;
+            const displaySource = (function(){
+              if (hasPwd && u.source === 'ldap') return 'hybrid';
+              if (hasPwd) return u.source || 'local';
+              return u.source || 'ldap';
+            })();
+          %>
+          <tr class="user-row"
+              data-search-val="<%= e((u.displayName + ' ' + u.username + ' ' + (u.email||'') + ' ' + displaySource).toLowerCase()) %>">
+            <!-- Avatar + name -->
+            <td class="user-name-cell">
+              <div class="avatar avatar-md" aria-hidden="true">
+                <% if (u.avatarUrl) { %>
+                  <img src="<%= u.avatarUrl %>" alt="" referrerpolicy="no-referrer" />
+                <% } else { %>
+                  <span class="avatar-letter"><%= ((u.displayName || u.username || '?')[0] || '?').toUpperCase() %></span>
+                <% } %>
+              </div>
+              <div class="user-admin-info">
+                <span class="user-admin-name"><%= e(u.displayName || u.username) %></span>
+                <span class="user-admin-email"><%= e(u.email || '—') %></span>
+              </div>
+            </td>
+            <!-- Username -->
+            <td class="user-username-cell">
+              <code class="inline-code"><%= e(u.username) %></code>
+              <% if (isSelf) { %>
+                <span class="self-badge" title="This is your account">you</span>
+              <% } else if (isEnvAdmin) { %>
+                <span class="self-badge" title="Environment-configured local administrator">env-admin</span>
+              <% } %>
+            </td>
+            <!-- Source -->
+            <td class="user-source-cell">
+              <span class="source-badge source-badge-<%= displaySource %>">
+                <% if (displaySource === 'local') { %>🔐 Local
+                <% } else if (displaySource === 'hybrid') { %>🔐🌐 Hybrid
+                <% } else { %>🌐 LDAP<% } %>
+              </span>
+            </td>
+            <!-- Last login -->
+            <td class="user-date-cell">
+              <% if (u.lastLoginAt) { %>
+                <time datetime="<%= e(u.lastLoginAt) %>">
+                  <%= new Date(u.lastLoginAt).toLocaleDateString(undefined, {dateStyle:'medium'}) %>
+                </time>
+              <% } else { %>&mdash;<% } %>
+            </td>
+            <!-- Registered -->
+            <td class="user-date-cell">
+              <% if (u.registeredAt) { %>
+                <time datetime="<%= e(u.registeredAt) %>">
+                  <%= new Date(u.registeredAt).toLocaleDateString(undefined, {dateStyle:'medium'}) %>
+                </time>
+              <% } else { %>&mdash;<% } %>
+            </td>
+            <!-- Role -->
+            <td class="user-role-cell">
+              <% if (isProtected) { %>
+                <span class="role-badge role-badge-<%= u.role %>"><%= u.role %></span>
+                <span class="self-protect-note">
+                  <%= isSelf ? 'Cannot change own role' : 'Env admin role is fixed' %>
+                </span>
+              <% } else { %>
+                <form method="POST" action="/admin/users/<%= e(u.username) %>/role"
+                      class="role-form" id="roleForm_<%= e(u.username) %>">
+                  <input type="hidden" name="_csrf" value="<%= csrf %>" />
+                  <select name="role"
+                          class="role-select role-select-<%= u.role %>"
+                          aria-label="Role for <%= e(u.displayName || u.username) %>"
+                          onchange="this.form.submit()">
+                    <option value="reader"        <%= u.role === 'reader'        ? 'selected' : '' %>>Reader</option>
+                    <option value="editor"        <%= u.role === 'editor'        ? 'selected' : '' %>>Editor</option>
+                    <option value="administrator" <%= u.role === 'administrator' ? 'selected' : '' %>>Administrator</option>
+                  </select>
+                  <noscript><button type="submit" class="btn btn-sm btn-ghost">Save</button></noscript>
+                </form>
+              <% } %>
+            </td>
+            <!-- Actions -->
+            <td class="user-actions-cell">
+              <% if (!isProtected) { %>
+                <!-- Reset password -->
+                <button type="button" class="btn btn-sm btn-ghost js-open-pwd"
+                        aria-controls="pwdModal_<%= e(u.username) %>" aria-haspopup="dialog"
+                        data-username="<%= e(u.username) %>" data-display="<%= e(u.displayName || u.username) %>">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                  Reset Password
+                </button>
+
+                <!-- Delete -->
+                <button type="button" class="btn btn-sm btn-danger js-open-del"
+                        aria-controls="delModal_<%= e(u.username) %>" aria-haspopup="dialog"
+                        data-username="<%= e(u.username) %>" data-display="<%= e(u.displayName || u.username) %>">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
+                  Delete
+                </button>
+              <% } else { %>
+                <span class="self-protect-note">
+                  <%= isSelf ? 'No actions on own account' : 'Managed via .env file' %>
+                </span>
+              <% } %>
+            </td>
+          </tr>
+
+          <!-- Password reset modal (one per user, lightweight) -->
+          <% if (!isProtected) { %>
+            <div class="modal-overlay hidden" id="pwdModal_<%= e(u.username) %>"
+                 role="dialog" aria-modal="true" aria-labelledby="pwdModalTitle_<%= e(u.username) %>" tabindex="-1">
+              <div class="modal">
+                <form method="POST" action="/admin/users/<%= e(u.username) %>/reset-password" novalidate>
+                  <input type="hidden" name="_csrf" value="<%= csrf %>" />
+                  <h3 class="modal-title" id="pwdModalTitle_<%= e(u.username) %>">
+                    <% if (displaySource === 'ldap') { %>
+                      Grant Local Password Access for <%= e(u.displayName || u.username) %>
+                    <% } else { %>
+                      Reset Local Password for <%= e(u.displayName || u.username) %>
+                    <% } %>
+                  </h3>
+                  <p class="form-hint" style="margin-bottom: 1rem;">
+                    <% if (displaySource === 'ldap') { %>
+                      Set a password below to enable local login for this LDAP user (they'll be able
+                      to sign in either way — "Hybrid" mode).
+                    <% } else if (displaySource === 'hybrid') { %>
+                      Set a new password below, or leave both fields empty to <em>remove</em> local
+                      access and require Active Directory login only.
+                    <% } else { %>
+                      Set a new password below, or leave both fields empty to <em>remove</em> local
+                      access (this user will no longer be able to log in).
+                    <% } %>
+                  </p>
+                  <div class="form-group">
+                    <label class="form-label" for="pwdNew_<%= e(u.username) %>">
+                      New password
+                      <span class="form-hint">At least 8 characters. Leave empty to remove local access.</span>
+                    </label>
+                    <input type="password" id="pwdNew_<%= e(u.username) %>" name="newPassword"
+                      class="form-input" minlength="8" maxlength="256" autocomplete="new-password" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label" for="pwdConfirm_<%= e(u.username) %>">Confirm new password</label>
+                    <input type="password" id="pwdConfirm_<%= e(u.username) %>" name="confirmPassword"
+                      class="form-input" minlength="8" maxlength="256" autocomplete="new-password" />
+                  </div>
+                  <div class="modal-actions">
+                    <button type="button" class="btn btn-ghost js-close-modal"
+                            data-close="pwdModal_<%= e(u.username) %>">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                      Save
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+
+            <!-- Delete modal -->
+            <div class="modal-overlay hidden" id="delModal_<%= e(u.username) %>"
+                 role="dialog" aria-modal="true" aria-labelledby="delModalTitle_<%= e(u.username) %>" tabindex="-1">
+              <div class="modal">
+                <form method="POST" action="/admin/users/<%= e(u.username) %>/delete">
+                  <input type="hidden" name="_csrf" value="<%= csrf %>" />
+                  <h3 class="modal-title" id="delModalTitle_<%= e(u.username) %>">
+                    Delete user <%= e(u.displayName || u.username) %>?
+                  </h3>
+                  <p style="margin: 0 0 1rem;">
+                    This will permanently remove <strong><%= e(u.displayName || u.username) %></strong>
+                    (<code class="inline-code"><%= e(u.username) %></code>, <span class="source-badge source-badge-<%= displaySource %>"><%= displaySource %></span>) from the user registry.
+                  </p>
+                  <% if (displaySource === 'ldap') { %>
+                    <p class="form-hint" style="margin-bottom: 1rem;">
+                      ⚠️ This is an LDAP-only user. If they sign in again via Active Directory, a new
+                      account will be auto-recreated with default <span class="role-badge role-badge-reader">Reader</span> role.
+                    </p>
+                  <% } else { %>
+                    <p class="form-hint" style="margin-bottom: 1rem;">
+                      ⚠️ This is a <%= displaySource %> account. It will be completely removed and
+                      <% if (displaySource === 'local') { %>must be recreated manually to restore access.<% } else { %>the local password will no longer work; LDAP access will still work (re-auto-registers as Reader on next login).<% } %>
+                    </p>
+                  <% } %>
+                  <div class="modal-actions">
+                    <button type="button" class="btn btn-ghost js-close-modal"
+                            data-close="delModal_<%= e(u.username) %>">Cancel</button>
+                    <button type="submit" class="btn btn-danger">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/></svg>
+                      Delete User
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          <% } %>
+        <% }); %>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="empty-state hidden" id="noUserResults" aria-live="polite">
+    <div class="empty-state-icon" aria-hidden="true">🔍</div>
+    <p class="empty-state-text">No users match your search.</p>
+  </div>
+<% } %>
+
+<div class="admin-footer-note">
+  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+  Role changes take effect on the user's <strong>next login</strong> (their current session keeps the old role until they sign out and back in).
+  Password changes take effect <strong>immediately</strong>.
+</div>
+
+<style>
+  .source-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
+  .source-badge-local  { background: #e6f4ea; color: #137333; border: 1px solid #ceead6; }
+  .source-badge-ldap   { background: #e8f0fe; color: #1967d2; border: 1px solid #d2e3fc; }
+  .source-badge-hybrid { background: #fce8e6; color: #c5221f; border: 1px solid #fad2cf; background: linear-gradient(135deg, #fef7e0 0%, #e8f0fe 100%); color: #8a4a00; border-color: #f6d07f; }
+
+  .user-actions-cell {
+    text-align: right;
+    white-space: nowrap;
+  }
+  .user-actions-cell .btn-sm + .btn-sm {
+    margin-left: 0.4rem;
+  }
+
+  .view-header-right {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .modal-title {
+    margin: 0 0 0.5rem 0;
+    font-size: 1.1rem;
+    line-height: 1.3;
+  }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.6rem;
+    margin-top: 1rem;
+    flex-wrap: wrap;
+  }</style>
+
+<script>
+  // ─── Toggle create card ─────────────────────────────────────────────────
+  const createBtn   = document.getElementById('toggleCreateBtn');
+  const createCard  = document.getElementById('createLocalUserCard');
+  const cancelBtn   = document.getElementById('cancelCreateBtn');
+  if (createBtn && createCard) {
+    createBtn.addEventListener('click', () => {
+      const expanded = createCard.classList.toggle('hidden') === false;
+      createBtn.setAttribute('aria-expanded', String(expanded));
+      if (expanded) createCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      const first = createCard.querySelector('input[name="username"]');
+      if (expanded && first) first.focus();
+    });
+  }
+  if (cancelBtn && createCard) {
+    cancelBtn.addEventListener('click', () => {
+      createCard.classList.add('hidden');
+      createBtn.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  // ─── User search ───────────────────────────────────────────────────────
+  const userSearch = document.getElementById('userSearch');
+  if (userSearch) {
+    userSearch.addEventListener('input', function () {
+      const q = this.value.toLowerCase();
+      let visible = 0;
+      document.querySelectorAll('.user-row').forEach(row => {
+        const match = !q || (row.dataset.searchVal || '').includes(q);
+        row.classList.toggle('hidden', !match);
+        if (match) visible++;
+      });
+      const noRes = document.getElementById('noUserResults');
+      if (noRes) noRes.classList.toggle('hidden', visible > 0);
+    });
+  }
+
+  // ─── Highlight the role select to match current value colour ───────────
+  function syncSelectColour(sel) {
+    sel.className = 'role-select role-select-' + sel.value;
+  }
+  document.querySelectorAll('.role-select').forEach(sel => {
+    sel.addEventListener('change', () => syncSelectColour(sel));
+  });
+
+  // ─── Password reset modal + delete modal ───────────────────────────────
+  function openModal(id) {
+    const m = document.getElementById(id);
+    if (!m) return;
+    m.classList.remove('hidden');
+    // focus first input
+    const first = m.querySelector('input[type="password"], input[type="text"], button[type="submit"]');
+    if (first) setTimeout(() => first.focus(), 30);
+  }
+  function closeModal(id) {
+    const m = document.getElementById(id);
+    if (m) m.classList.add('hidden');
+  }
+  document.querySelectorAll('.js-open-pwd').forEach(btn => {
+    btn.addEventListener('click', () => openModal('pwdModal_' + btn.dataset.username));
+  });
+  document.querySelectorAll('.js-open-del').forEach(btn => {
+    btn.addEventListener('click', () => openModal('delModal_' + btn.dataset.username));
+  });
+  document.querySelectorAll('.js-close-modal').forEach(btn => {
+    btn.addEventListener('click', () => closeModal(btn.dataset.close));
+  });
+  document.querySelectorAll('.modal-overlay').forEach(overlay => {
+    overlay.addEventListener('click', ev => {
+      if (ev.target === overlay) overlay.classList.add('hidden');
+    });
+  });
+  document.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') {
+      document.querySelectorAll('.modal-overlay:not(.hidden)').forEach(m => m.classList.add('hidden'));
+    }
+  });
+</script>

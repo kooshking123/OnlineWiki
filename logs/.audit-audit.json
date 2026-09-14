@@ -1,0 +1,20 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 90
+    },
+    "auditLog": "C:\\Users\\leeda\\OneDrive\\Dev\\Antigravity\\OnlineHelp\\logs\\.audit-audit.json",
+    "files": [
+        {
+            "date": 1788399230861,
+            "name": "C:\\Users\\leeda\\OneDrive\\Dev\\Antigravity\\OnlineHelp\\logs\\audit-2026-09-03.log",
+            "hash": "1fddc5bf5bb95aba49da37d57ca78a45c750f72a610c26d108094f283b8f777f"
+        },
+        {
+            "date": 1788399398131,
+            "name": "c:\\Users\\leeda\\OneDrive\\Dev\\Antigravity\\OnlineHelp\\logs\\audit-2026-09-03.log",
+            "hash": "7fc6eb61c887fcd631b054222dc1e83b378c56370df1879894eb022e78fb1ed9"
+        }
+    ],
+    "hashType": "sha256"
+}

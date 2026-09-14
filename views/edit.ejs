@@ -1,0 +1,250 @@
+<!-- Breadcrumb -->
+<nav class="breadcrumb" aria-label="Breadcrumb">
+  <a href="/">Home</a>
+  <% if (!isNew && page) { %>
+    <span class="breadcrumb-sep" aria-hidden="true">/</span>
+    <a href="/pages/<%= page.slug %>"><%= page.title %></a>
+  <% } %>
+  <span class="breadcrumb-sep" aria-hidden="true">/</span>
+  <span aria-current="page"><%= isNew ? 'New Page' : 'Edit' %></span>
+</nav>
+
+<div class="view-header">
+  <div class="view-header-left">
+    <h1 class="view-title"><%= isNew ? 'Create New Page' : 'Edit Page' %></h1>
+  </div>
+</div>
+
+<form
+  action="<%= isNew ? '/pages/new' : '/pages/' + page.slug + '/edit' %>"
+  method="POST"
+  id="pageForm"
+  novalidate
+>
+  <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+  <%# Concurrency sentinel — the server compares this to the on-disk updatedAt
+      when saving. If they differ, a concurrent edit occurred on another server. %>
+  <input type="hidden" name="editedAt"
+    value="<%= isNew ? '' : (page && page.updatedAt ? page.updatedAt : '') %>" />
+
+  <div class="editor-layout">
+
+    <!-- ── Main editing column ──────────────────────────────────────────── -->
+    <div class="editor-main">
+      <div class="editor-card">
+
+        <!-- Title -->
+        <div class="form-group">
+          <label class="form-label" for="pageTitle">
+            Page Title <span class="required-mark" aria-label="required">*</span>
+          </label>
+          <input
+            type="text"
+            id="pageTitle"
+            name="title"
+            class="form-input form-input-xl"
+            value="<%= isNew ? '' : (page.title || '') %>"
+            placeholder="Enter page title…"
+            required
+            autocomplete="off"
+          />
+        </div>
+
+        <!-- Slug (new pages only) -->
+        <% if (isNew) { %>
+        <div class="form-group">
+          <label class="form-label" for="pageSlug">
+            URL Slug <span class="required-mark" aria-label="required">*</span>
+          </label>
+          <div class="slug-wrap">
+            <span class="slug-prefix">/pages/</span>
+            <input
+              type="text"
+              id="pageSlug"
+              name="slug"
+              class="form-input"
+              placeholder="auto-generated-from-title"
+              autocomplete="off"
+              pattern="[a-z0-9-]+"
+            />
+          </div>
+          <p class="form-hint">Only lowercase letters, numbers, and hyphens. Auto-generated from the title.</p>
+        </div>
+        <% } %>
+
+        <!-- Tags -->
+        <div class="form-group">
+          <label class="form-label" for="pageTags">Tags</label>
+          <input
+            type="text"
+            id="pageTags"
+            name="tags"
+            class="form-input"
+            value="<%= isNew ? '' : ((page && page.tags) ? page.tags.join(', ') : '') %>"
+            placeholder="api, getting-started, reference"
+            autocomplete="off"
+          />
+          <p class="form-hint">Comma-separated. Used for filtering and search.</p>
+        </div>
+
+        <!-- TinyMCE editor -->
+        <div class="form-group editor-group">
+          <label class="form-label" for="content">
+            Content <span class="required-mark" aria-label="required">*</span>
+          </label>
+          <textarea id="content" name="content" class="tinymce-textarea"></textarea>
+        </div>
+
+      </div><!-- /.editor-card -->
+    </div><!-- /.editor-main -->
+
+    <!-- ── Sidebar column ───────────────────────────────────────────────── -->
+    <div class="editor-sidebar-col">
+
+      <!-- Publish actions -->
+      <div class="editor-widget">
+        <h2 class="editor-widget-title">Publish</h2>
+        <button type="submit" class="btn btn-primary btn-full" id="saveBtn" form="pageForm">
+          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          Save Page
+        </button>
+        <% if (!isNew && page) { %>
+          <a href="/pages/<%= page.slug %>" class="btn btn-ghost btn-full">Discard Changes</a>
+        <% } else { %>
+          <a href="/" class="btn btn-ghost btn-full">Cancel</a>
+        <% } %>
+      </div>
+
+      <!-- Hierarchy widget (parent page + position) -->
+      <div class="editor-widget">
+        <h2 class="editor-widget-title">Hierarchy</h2>
+        <div class="form-group">
+          <label class="form-label" for="parentPageSelect">Parent page</label>
+          <select id="parentPageSelect" name="parent" class="form-input form-input-sm">
+            <option value="" <%= (!presetParent) ? 'selected' : '' %>>— None (top-level section) —</option>
+            <% if (selectPages && selectPages.length) { %>
+              <% selectPages.forEach(p => { %>
+                <option value="<%= p.slug %>" <%= (presetParent === p.slug) ? 'selected' : '' %>>
+                  <%= '—'.repeat(p.depth) %><%= p.depth > 0 ? ' ' : '' %><%= p.title %>
+                </option>
+              <% }); %>
+            <% } %>
+          </select>
+          <p class="form-hint">Determines where this page lives in the tree.</p>
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label" for="pagePosition">Position</label>
+          <input type="number" id="pagePosition" name="position" class="form-input form-input-sm"
+            min="0" step="1"
+            value="<%= isNew ? 0 : (page && page.position != null ? page.position : 0) %>"
+            placeholder="0" />
+          <p class="form-hint">Order among siblings (0 = first). Use ↑↓ buttons on the page view instead.</p>
+        </div>
+      </div>
+
+      <!-- Attachments widget (existing pages only) -->
+      <% if (!isNew && page) { %>
+      <div class="editor-widget" id="attachmentsWidget">
+        <h2 class="editor-widget-title">Attachments</h2>
+
+        <div id="attachmentChips">
+          <% if (page.attachments && page.attachments.length) { %>
+            <% page.attachments.forEach(att => { %>
+              <div class="attachment-chip" id="chip_<%= att.replace(/[^a-zA-Z0-9]/g,'_') %>">
+                <span class="attachment-chip-name"><%= att.replace(/^\d+_/, '') %></span>
+                <button
+                  type="button"
+                  class="attachment-chip-remove"
+                  data-filename="<%= att %>"
+                  data-slug="<%= page.slug %>"
+                  aria-label="Remove <%= att.replace(/^\d+_/, '') %>"
+                >×</button>
+              </div>
+            <% }); %>
+          <% } else { %>
+            <p class="editor-hint" id="noAttachMsg">No attachments yet.</p>
+          <% } %>
+        </div>
+
+        <button type="button" class="btn btn-secondary btn-full btn-sm" id="addAttachmentBtn" style="margin-top:0.75rem">
+          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Add from Uploads
+        </button>
+      </div>
+      <% } %>
+
+      <!-- Quick Media Insert widget (both new and existing pages) -->
+      <div class="editor-widget" id="quickMediaWidget">
+        <h2 class="editor-widget-title">Quick Media Insert</h2>
+        <p class="editor-hint" style="margin-top:0.25rem;margin-bottom:0.75rem">
+          Insert images or links to uploaded files directly into the editor content — no extra steps.
+        </p>
+        <div style="display:flex;flex-direction:column;gap:0.5rem">
+          <button type="button" class="btn btn-secondary btn-full btn-sm" id="mediaInsertLinkBtn">
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="margin-right:0.35rem;display:inline-block;vertical-align:-1px"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            Insert Link to File…
+          </button>
+          <button type="button" class="btn btn-secondary btn-full btn-sm" id="mediaInsertImageBtn">
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="margin-right:0.35rem;display:inline-block;vertical-align:-1px"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            Insert Image…
+          </button>
+          <a href="/uploads" target="_blank" rel="noopener" class="btn btn-ghost btn-full btn-sm" style="justify-content:center;margin-top:0.25rem;text-decoration:none">
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="margin-right:0.35rem;display:inline-block;vertical-align:-1px"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            Upload New Files…
+          </a>
+        </div>
+      </div>
+
+      <!-- Page info (existing pages only) -->
+      <% if (!isNew && page) { %>
+      <div class="editor-widget editor-widget-info">
+        <h2 class="editor-widget-title">Page Info</h2>
+        <dl class="info-dl">
+          <dt>Created</dt>
+          <dd><%= new Date(page.createdAt).toLocaleDateString(undefined, {dateStyle:'medium'}) %></dd>
+          <dt>Author</dt>
+          <dd><%= page.authorDisplay || page.author %></dd>
+          <dt>Slug</dt>
+          <dd><code class="inline-code">/pages/<%= page.slug %></code></dd>
+        </dl>
+      </div>
+      <% } %>
+
+    </div><!-- /.editor-sidebar-col -->
+  </div><!-- /.editor-layout -->
+</form>
+
+<!-- ═══ Attachment picker modal ════════════════════════════════════════════ -->
+<div class="modal-overlay hidden" id="attachPickerModal" role="dialog" aria-modal="true" aria-labelledby="attachPickerTitle">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h2 class="modal-title" id="attachPickerTitle">Add Attachment</h2>
+      <button class="modal-close-btn" id="closeAttachPicker" aria-label="Close">×</button>
+    </div>
+    <div class="modal-search-wrap">
+      <input type="search" id="attachPickerSearch" class="form-input" placeholder="Search uploaded files…" aria-label="Search uploads" />
+    </div>
+    <div id="attachPickerList" class="attach-picker-list">
+      <p class="editor-hint">Loading…</p>
+    </div>
+    <div class="modal-footer">
+      <a href="/uploads" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">
+        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        Manage Uploads
+      </a>
+      <button class="btn btn-ghost" id="closeAttachPickerFooter">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Pass server-side data to editor.js -->
+<script>
+  window.WIKI = {
+    isNew:   <%- isNew ? 'true' : 'false' %>,
+    slug:    <%- JSON.stringify(isNew ? '' : (page ? page.slug : '')) %>,
+    content: <%- JSON.stringify(isNew ? '' : (page && page.content ? page.content : '')) %>,
+    csrf:    <%- JSON.stringify(typeof csrfToken !== 'undefined' ? csrfToken : '') %>
+  };
+</script>
+<script src="/tinymce/tinymce.min.js"></script>
+<script src="/js/editor.js"></script>

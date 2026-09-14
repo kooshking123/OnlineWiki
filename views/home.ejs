@@ -1,0 +1,256 @@
+<div class="view-header">
+  <div class="view-header-left">
+    <% const hs = settings ? (settings.homeHeading || 'Wiki Home') : 'Wiki Home'; %>
+    <% const hsSub = settings ? (settings.homeSubtitle || '{N} page{N_S}') : '{N} page{N_S}'; %>
+    <% const total = pages.length; %>
+    <% const renderedSub = String(hsSub)
+          .replace(/\{N\}/g, String(total))
+          .replace(/\{N_S\}/g, total === 1 ? '' : 's'); %>
+    <h1 class="view-title"><%= hs %></h1>
+    <p class="view-subtitle"><%- renderedSub %></p>
+  </div>
+  <% const canEdit = user && (user.role === 'editor' || user.role === 'administrator'); %>
+  <% if (canEdit) { %>
+  <div class="view-header-right">
+    <a href="/pages/new" class="btn btn-primary" id="newPageBtn">
+      <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      New Page
+    </a>
+  </div>
+  <% } %>
+</div>
+
+<% if (pages.length > 0) { %>
+<div class="home-search-wrap">
+  <div class="home-search-bar">
+    <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="search" id="homeSearch" class="home-search-input"
+      placeholder="Search all pages…" autocomplete="off" aria-label="Search pages" />
+    <kbd class="search-hint">⌘K</kbd>
+  </div>
+</div>
+<% } %>
+
+<% if (tree.length === 0) { %>
+  <div class="empty-state">
+    <div class="empty-state-icon" aria-hidden="true">📝</div>
+    <h2 class="empty-state-title">No pages yet</h2>
+    <p class="empty-state-text">Start building your knowledge base by creating the first page.</p>
+    <a href="/pages/new" class="btn btn-primary">Create First Page</a>
+  </div>
+<% } else { %>
+
+  <%# ── Top-level section cards (depth 0, shown when no query) ─────────── %>
+  <div class="section-grid" id="sectionGrid">
+    <% tree.forEach(section => { %>
+      <div class="section-card">
+        <div class="section-card-header">
+          <a href="/pages/<%= section.slug %>" class="section-card-title">
+            <%= section.title %>
+          </a>
+          <% if (section.tags && section.tags.length) { %>
+            <div class="section-card-tags">
+              <% section.tags.forEach(t => { %><span class="tag"><%= t %></span><% }); %>
+            </div>
+          <% } %>
+          <div class="section-card-meta">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            <%= new Date(section.updatedAt).toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'}) %>
+            <% if (section.children && section.children.length) { %>
+              <span class="section-child-badge">
+                <%= section.children.length %> chapter<%= section.children.length !== 1 ? 's' : '' %>
+              </span>
+            <% } %>
+          </div>
+        </div>
+
+        <% if (section.children && section.children.length) { %>
+          <ul class="section-card-children" aria-label="Chapters in <%= section.title %>">
+            <% section.children.slice(0,6).forEach(child => { %>
+              <li>
+                <a href="/pages/<%= child.slug %>" class="section-child-link">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                  <%= child.title %>
+                  <% if (child.children && child.children.length) { %>
+                    <span class="child-sub-count"><%= child.children.length %></span>
+                  <% } %>
+                </a>
+              </li>
+            <% }); %>
+            <% if (section.children.length > 6) { %>
+              <li>
+                <a href="/pages/<%= section.slug %>" class="section-child-link section-child-more">
+                  + <%= section.children.length - 6 %> more…
+                </a>
+              </li>
+            <% } %>
+          </ul>
+        <% } %>
+
+        <div class="section-card-footer">
+          <a href="/pages/<%= section.slug %>" class="btn btn-sm btn-ghost">Open →</a>
+          <% if (canEdit) { %>
+          <a href="/pages/new?parent=<%= section.slug %>" class="btn btn-sm btn-ghost">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add chapter
+          </a>
+          <% } %>
+        </div>
+      </div>
+    <% }); %>
+  </div>
+
+  <%# ── Server-rendered search results (shown when query has results) ── %>
+  <div id="searchResultsWrap" class="hidden">
+    <div class="search-result-header">
+      <h2 id="searchResultCountHeading"></h2>
+    </div>
+    <div class="search-results-grid" id="searchResultsList" aria-live="polite"></div>
+  </div>
+
+  <div class="search-empty-state hidden" id="noResults" aria-live="polite">
+    <div class="search-empty-icon" aria-hidden="true">🔍</div>
+    <h2 class="search-empty-title">No pages match your search</h2>
+    <p class="search-empty-text">Try a different keyword — search includes page titles, tags, and all content text.</p>
+  </div>
+<% } %>
+
+<script>
+  // ── Home search: server-backed full-text via /api/search?q= ─────────────────
+  const homeSearch = document.getElementById('homeSearch');
+  if (homeSearch) {
+    const gridEl       = document.getElementById('sectionGrid');
+    const resultsWrap  = document.getElementById('searchResultsWrap');
+    const resultsList  = document.getElementById('searchResultsList');
+    const countHeading = document.getElementById('searchResultCountHeading');
+    const noResEl      = document.getElementById('noResults');
+    const urlQ         = new URL(window.location.href).searchParams.get('q');
+    let   debounceT    = null;
+    let   reqToken     = 0;
+
+    function escapeForDisplay(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+        .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    }
+
+    function fmtDate(iso) {
+      if (!iso) return '';
+      try {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return '';
+        return d.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'});
+      } catch { return ''; }
+    }
+
+    function badgeLabel(f) {
+      switch(f){
+        case 'title': return 'Title match';
+        case 'tags':  return 'Tag match';
+        case 'slug':  return 'URL match';
+        case 'body':  return 'Content match';
+        default:      return 'Match';
+      }
+    }
+
+    function showHome() {
+      if (gridEl)       gridEl.classList.remove('hidden');
+      if (resultsWrap)  resultsWrap.classList.add('hidden');
+      if (noResEl)      noResEl.classList.add('hidden');
+    }
+    function hideHome() {
+      if (gridEl)       gridEl.classList.add('hidden');
+      if (resultsWrap)  resultsWrap.classList.remove('hidden');
+      if (noResEl)      noResEl.classList.add('hidden');
+    }
+    function showEmpty(q) {
+      if (gridEl)       gridEl.classList.add('hidden');
+      if (resultsWrap)  resultsWrap.classList.add('hidden');
+      if (noResEl) {
+        noResEl.classList.remove('hidden');
+        const tEl = noResEl.querySelector('.search-empty-title');
+        if (tEl) tEl.innerHTML = 'No pages match for <strong>"' + escapeForDisplay(q) + '"</strong>';
+      }
+    }
+
+    function renderResults(payload, query) {
+      const results = (payload && payload.results) ? payload.results : [];
+      if (results.length === 0) { showEmpty(query); return; }
+
+      hideHome();
+      const matches = payload.matches || results.length;
+      if (countHeading) {
+        countHeading.innerHTML =
+          'Found <strong>' + matches + '</strong> page' + (matches !== 1 ? 's' : '') + ' for <strong>"' + escapeForDisplay(query) + '"</strong>';
+      }
+      const cards = results.map(r => {
+        const tagsHtml = (Array.isArray(r.tags) && r.tags.length)
+          ? '<div class="result-tags">' + r.tags.map(t => '<span class="tag">' + escapeForDisplay(t) + '</span>').join('') + '</div>'
+          : '';
+        const authorHtml = r.authorDisplay
+          ? '<span>By ' + escapeForDisplay(r.authorDisplay) + '</span>'
+          : '';
+        const dateHtml = r.updatedAt
+          ? '<span>' + fmtDate(r.updatedAt) + '</span>'
+          : '';
+        const hitBadgeHtml =
+          '<span class="result-badge result-badge--' + escapeForDisplay(r.hitField || 'body') + '">' +
+          badgeLabel(r.hitField) +
+          '</span>';
+        return (
+          '<article class="search-result-card">' +
+            '<div class="result-header">' +
+              '<a href="/pages/' + encodeURIComponent(r.slug) + '" class="result-title">' + (r.titleHtml || escapeForDisplay(r.title)) + '</a>' +
+              (dateHtml ? '<span class="result-date">' + dateHtml + '</span>' : '') +
+            '</div>' +
+            tagsHtml +
+            '<p class="result-snippet">' + (r.snippetHtml || 'No preview available.') + '</p>' +
+            '<div class="result-meta">' +
+              hitBadgeHtml +
+              authorHtml +
+            '</div>' +
+          '</article>'
+        );
+      }).join('');
+      resultsList.innerHTML = cards;
+    }
+
+    function performSearch(q) {
+      const trimmed = (q || '').trim();
+      if (!trimmed) { showHome(); return; }
+      const myToken = ++reqToken;
+      fetch('/api/search?q=' + encodeURIComponent(trimmed), { credentials: 'same-origin' })
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(data => {
+          if (myToken !== reqToken) return;
+          renderResults(data, trimmed);
+        })
+        .catch(err => {
+          if (myToken !== reqToken) return;
+          console.error('[home-search]', err);
+          showEmpty(trimmed);
+        });
+    }
+
+    homeSearch.addEventListener('input', function () {
+      const q = this.value;
+      clearTimeout(debounceT);
+      if (!q.trim()) {
+        showHome();
+        return;
+      }
+      debounceT = setTimeout(() => performSearch(q), 220);
+    });
+
+    // Prefill + run search if ?q= in URL (bookmark / follow search link)
+    if (urlQ) {
+      homeSearch.value = urlQ;
+      performSearch(urlQ);
+    }
+
+    // ⌘K shortcut
+    document.addEventListener('keydown', e => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); homeSearch.focus(); }
+    });
+  }
+</script>

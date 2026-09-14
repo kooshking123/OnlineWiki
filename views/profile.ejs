@@ -1,0 +1,438 @@
+<%
+  function e(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+  var st = (typeof settings !== 'undefined' && settings) ? settings : { siteTitle: 'OnlineWiki' };
+  var viewAvatarUrl = (typeof avatarUrl !== 'undefined' && avatarUrl) ? avatarUrl : null;
+  var initial = (user.displayName || user.username || 'U')[0].toUpperCase();
+  var recordObj = (typeof record !== 'undefined' && record) ? record : null;
+  var currentDisplayName = (recordObj && recordObj.displayName) || user.displayName || user.username || '';
+  var currentEmail = (recordObj && recordObj.email) || user.email || '';
+  var recordRegistered = recordObj && recordObj.registeredAt ? recordObj.registeredAt : null;
+  var recordLastLogin = recordObj && recordObj.lastLoginAt ? recordObj.lastLoginAt : null;
+  var recordSource = recordObj && recordObj.source ? recordObj.source : null;
+%>
+<div class="profile-wrap">
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/" class="breadcrumb-link">Home</a>
+    <span class="breadcrumb-sep" aria-hidden="true">/</span>
+    <span aria-current="page">My Profile</span>
+  </nav>
+
+  <div class="view-header">
+    <div class="view-header-left">
+      <h1 class="view-title">My Profile</h1>
+      <p class="view-subtitle">
+        Update your display name, email, and profile picture.  Your avatar is cropped to a circle.
+      </p>
+    </div>
+  </div>
+
+  <div class="profile-grid">
+
+    <!-- ─── Avatar preview + uploader ─────────────────────────────────── -->
+    <section class="settings-card profile-avatar-card">
+      <h2 class="settings-card-title">Avatar</h2>
+      <p class="form-hint" style="margin:0 0 1.25rem;">
+        Upload a photo, then drag and zoom inside the circle to frame your face.  The result will be used everywhere your avatar appears.
+      </p>
+
+      <div class="avatar-large-wrap" id="avatarLargeWrap">
+        <% if (viewAvatarUrl) { %>
+          <img src="<%= viewAvatarUrl %>" alt="Current avatar" class="avatar avatar-lg avatar-preview" referrerpolicy="no-referrer" />
+        <% } else { %>
+          <div class="avatar avatar-lg avatar-letter" aria-hidden="true"><%= initial %></div>
+        <% } %>
+      </div>
+
+      <div class="avatar-cropper" id="avatarCropper" style="display:none;">
+        <div class="avatar-stage">
+          <canvas id="avatarCanvas" width="400" height="400" aria-label="Avatar crop preview"></canvas>
+          <div class="avatar-mask-ring" aria-hidden="true"></div>
+        </div>
+        <div class="avatar-zoom-row">
+          <span class="avatar-zoom-label">Zoom</span>
+          <input type="range" id="avatarZoom" min="1" max="3" step="0.01" value="1" />
+        </div>
+        <p class="form-hint" style="margin:0.75rem 0 0 0; text-align:center;">
+          Drag the image inside the circle to reposition.  Use the slider to zoom.
+        </p>
+      </div>
+
+      <div class="avatar-upload-row">
+        <label class="btn btn-ghost" for="avatarFile" style="cursor:pointer;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Upload photo
+        </label>
+        <input type="file" id="avatarFile" accept="image/png,image/jpeg,image/webp" hidden />
+        <button type="button" class="btn btn-ghost" id="avatarResetBtn" style="display:none;">Reset</button>
+      </div>
+
+      <% if (viewAvatarUrl) { %>
+        <form method="POST" action="/profile/avatar/delete" style="margin-top:1rem;" onsubmit="return confirm('Remove your avatar and go back to your initial letter?');">
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+          <button type="submit" class="btn btn-sm btn-danger">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/></svg>
+            Remove avatar
+          </button>
+        </form>
+      <% } %>
+    </section>
+
+    <!-- ─── Personal info ─────────────────────────────────────────────── -->
+    <section class="settings-card">
+      <form method="POST" action="/profile" id="profileForm" novalidate>
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+        <input type="hidden" name="avatarData" id="avatarData" value="" />
+        <input type="hidden" name="clearAvatar" id="clearAvatarField" value="" />
+
+        <h2 class="settings-card-title">Personal info</h2>
+        <p class="form-hint" style="margin:0 0 1.5rem;">
+          These fields are used across the wiki (header, pages, user lists).
+        </p>
+
+        <div class="form-group">
+          <label class="form-label" for="displayName">Display name</label>
+          <input type="text" id="displayName" name="displayName" class="form-input"
+                 value="<%= e(currentDisplayName) %>"
+                 minlength="1" maxlength="80" autocomplete="name" required />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="email">Email</label>
+          <input type="email" id="email" name="email" class="form-input"
+                 value="<%= e(currentEmail) %>"
+                 maxlength="254" autocomplete="email" />
+        </div>
+
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label">Account</label>
+          <div class="profile-account-row">
+            <code class="inline-code"><%= e(user.username) %></code>
+            <% if (user._localAdmin) { %>
+              <span class="source-badge source-badge-local" style="margin-left:0.5rem;">Env Admin</span>
+            <% } else if (recordSource) { %>
+              <span class="source-badge source-badge-<%= recordSource %>" style="margin-left:0.5rem;">
+                <%= recordSource === 'local' ? '🔐 Local' : (recordSource === 'hybrid' ? '🔐🌐 Hybrid' : '🌐 LDAP') %>
+              </span>
+            <% } %>
+          </div>
+          <% if (recordRegistered) { %>
+            <p class="form-hint" style="margin-top:0.5rem;margin-bottom:0;">
+              Registered <%= new Date(recordRegistered).toLocaleDateString(undefined, {dateStyle:'medium'}) %>
+              <% if (recordLastLogin) { %> · Last seen <%= new Date(recordLastLogin).toLocaleDateString(undefined, {dateStyle:'medium'}) %><% } %>
+            </p>
+          <% } %>
+        </div>
+
+        <div class="settings-card-actions">
+          <a href="/" class="btn btn-ghost">Cancel</a>
+          <button type="submit" class="btn btn-primary">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+            Save changes
+          </button>
+        </div>
+      </form>
+    </section>
+
+  </div>
+</div>
+
+<style>
+  .profile-wrap { max-width: 960px; }
+  .profile-grid {
+    display: grid;
+    grid-template-columns: 1fr 1.25fr;
+    gap: 1.5rem;
+    align-items: flex-start;
+  }
+  @media (max-width: 820px) {
+    .profile-grid { grid-template-columns: 1fr; }
+  }
+  .profile-avatar-card { text-align: center; }
+  .avatar-large-wrap {
+    display: flex; justify-content: center; margin: 0 auto 1.25rem;
+  }
+  .avatar-upload-row {
+    display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap;
+  }
+  .avatar-cropper { margin: 0 auto 1rem; max-width: 400px; }
+  .avatar-stage {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    max-width: 400px;
+    margin: 0 auto 0.75rem;
+    overflow: hidden;
+    border-radius: var(--r-lg);
+    background: #111827;
+    user-select: none;
+    touch-action: none;
+    cursor: grab;
+  }
+  .avatar-stage:active { cursor: grabbing; }
+  .avatar-stage canvas {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    display: block;
+  }
+  .avatar-mask-ring {
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    box-shadow: 0 0 0 9999px rgba(17,24,39,0.55);
+    border: 2px solid rgba(255,255,255,0.7);
+    pointer-events: none;
+  }
+  .avatar-zoom-row {
+    display: flex; align-items: center; gap: 0.75rem;
+    padding: 0 0.25rem;
+  }
+  .avatar-zoom-label { font-size: 0.85rem; color: var(--c-text-muted); width: 3rem; }
+  #avatarZoom { flex: 1; }
+
+  .profile-account-row {
+    display: flex; align-items: center; flex-wrap: wrap;
+  }
+
+  .settings-card-actions {
+    display: flex; justify-content: flex-end; gap: 0.75rem;
+    margin-top: 1.5rem; padding-top: 1rem;
+    border-top: 1px solid var(--c-border-soft);
+  }
+
+  /* ─── Avatar classes (banner + sidebar + users table share these) ── */
+  .avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, var(--c-accent), #9b6ef7);
+    color: #fff;
+    font-weight: 700;
+    flex-shrink: 0;
+    border-radius: 9999px;
+    overflow: hidden;
+  }
+  .avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+    display: block;
+    border-radius: 9999px;
+  }
+  .avatar-sm { width: 28px; height: 28px; font-size: 0.72rem; }
+  .avatar-md { width: 32px; height: 32px; font-size: 0.82rem; }
+  .avatar-lg { width: 128px; height: 128px; font-size: 3rem; }
+  .avatar-xl { width: 40px; height: 40px; font-size: 1rem; }
+</style>
+
+<script>
+(function () {
+  const fileInput   = document.getElementById('avatarFile');
+  const canvas      = document.getElementById('avatarCanvas');
+  const cropperWrap = document.getElementById('avatarCropper');
+  const largeWrap   = document.getElementById('avatarLargeWrap');
+  const zoomSlider  = document.getElementById('avatarZoom');
+  const resetBtn    = document.getElementById('avatarResetBtn');
+  const avatarDataField   = document.getElementById('avatarData');
+  const clearAvatarField  = document.getElementById('clearAvatarField');
+  const form        = document.getElementById('profileForm');
+  const ctx         = canvas ? canvas.getContext('2d') : null;
+
+  let state = {
+    image: null,
+    offsetX: 0, offsetY: 0,
+    scale: 1,
+    dragging: false,
+    dragStartX: 0, dragStartY: 0,
+    startOffsetX: 0, startOffsetY: 0
+  };
+
+  function fitToCover() {
+    if (!state.image) return;
+    const cw = canvas.width, ch = canvas.height;
+    const iw = state.image.naturalWidth, ih = state.image.naturalHeight;
+    const s = Math.max(cw / iw, ch / ih);
+    state.scale = s;
+    state.offsetX = (cw - iw * s) / 2;
+    state.offsetY = (ch - ih * s) / 2;
+    if (zoomSlider) {
+      const min = parseFloat(zoomSlider.min), max = parseFloat(zoomSlider.max);
+      const ratio = s;
+      zoomSlider.value = String(Math.min(max, Math.max(min, ratio < 1 ? 1 : ratio)));
+    }
+    redraw();
+  }
+
+  function redraw() {
+    if (!ctx || !state.image) return;
+    const cw = canvas.width, ch = canvas.height;
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.imageSmoothingQuality = 'high';
+    ctx.save();
+    // Clip to circle so the redraw preview inside canvas itself is also a circle
+    ctx.beginPath();
+    ctx.arc(cw/2, ch/2, Math.min(cw, ch)/2, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = '#1f2937';
+    ctx.fillRect(0, 0, cw, ch);
+    ctx.drawImage(
+      state.image,
+      state.offsetX, state.offsetY,
+      state.image.naturalWidth * state.scale,
+      state.image.naturalHeight * state.scale
+    );
+    ctx.restore();
+  }
+
+  function exportCroppedCirclePng() {
+    const size = 320;
+    const out = document.createElement('canvas');
+    out.width = size; out.height = size;
+    const octx = out.getContext('2d');
+    octx.imageSmoothingQuality = 'high';
+    octx.beginPath();
+    octx.arc(size/2, size/2, size/2, 0, Math.PI*2);
+    octx.closePath();
+    octx.save();
+    octx.clip();
+    octx.fillStyle = '#ffffff';
+    octx.fillRect(0, 0, size, size);
+    const ratio = size / canvas.width;
+    octx.drawImage(
+      state.image,
+      state.offsetX * ratio, state.offsetY * ratio,
+      state.image.naturalWidth * state.scale * ratio,
+      state.image.naturalHeight * state.scale * ratio
+    );
+    octx.restore();
+    return out.toDataURL('image/png', 0.92);
+  }
+
+  if (fileInput) {
+    fileInput.addEventListener('change', e => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      if (!/^image\/(png|jpeg|webp)$/i.test(f.type)) {
+        alert('Please upload a PNG, JPEG, or WebP image.');
+        e.target.value = '';
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const img = new Image();
+        img.onload = () => {
+          state.image = img;
+          cropperWrap.style.display = 'block';
+          resetBtn.style.display = 'inline-flex';
+          if (largeWrap) largeWrap.style.display = 'none';
+          fitToCover();
+        };
+        img.onerror = () => alert('Could not read that image.');
+        img.src = ev.target.result;
+      };
+      reader.onerror = () => alert('Could not read the selected file.');
+      reader.readAsDataURL(f);
+    });
+  }
+
+  if (zoomSlider) {
+    zoomSlider.addEventListener('input', () => {
+      if (!state.image) return;
+      const base = Math.max(canvas.width / state.image.naturalWidth, canvas.height / state.image.naturalHeight);
+      const factor = parseFloat(zoomSlider.value);
+      state.scale = base * factor;
+      // Keep image centered around the circle center when zooming
+      state.offsetX = (canvas.width  - state.image.naturalWidth  * state.scale) / 2;
+      state.offsetY = (canvas.height - state.image.naturalHeight * state.scale) / 2;
+      redraw();
+    });
+  }
+
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+      state.image = null;
+      state.offsetX = state.offsetY = 0;
+      state.scale = 1;
+      cropperWrap.style.display = 'none';
+      resetBtn.style.display = 'none';
+      if (largeWrap) largeWrap.style.display = 'flex';
+      if (fileInput) fileInput.value = '';
+      if (avatarDataField) avatarDataField.value = '';
+      if (clearAvatarField) clearAvatarField.value = '';
+    });
+  }
+
+  function pointerPos(ev) {
+    const rect = canvas.getBoundingClientRect();
+    const src = ev.touches && ev.touches[0] ? ev.touches[0] : ev;
+    return {
+      x: (src.clientX - rect.left) * (canvas.width  / rect.width),
+      y: (src.clientY - rect.top)  * (canvas.height / rect.height)
+    };
+  }
+
+  if (canvas) {
+    canvas.addEventListener('pointerdown', ev => {
+      if (!state.image) return;
+      state.dragging = true;
+      canvas.setPointerCapture(ev.pointerId);
+      const p = pointerPos(ev);
+      state.dragStartX = p.x; state.dragStartY = p.y;
+      state.startOffsetX = state.offsetX; state.startOffsetY = state.offsetY;
+      ev.preventDefault();
+    });
+    canvas.addEventListener('pointermove', ev => {
+      if (!state.dragging || !state.image) return;
+      const p = pointerPos(ev);
+      state.offsetX = state.startOffsetX + (p.x - state.dragStartX);
+      state.offsetY = state.startOffsetY + (p.y - state.dragStartY);
+      redraw();
+    });
+    function endDrag(ev) {
+      if (!state.dragging) return;
+      state.dragging = false;
+      try { canvas.releasePointerCapture(ev.pointerId); } catch {}
+    }
+    canvas.addEventListener('pointerup', endDrag);
+    canvas.addEventListener('pointercancel', endDrag);
+    canvas.addEventListener('pointerleave', endDrag);
+
+    // Simple drag-drop file onto the stage
+    const stage = canvas.parentElement;
+    ['dragenter','dragover'].forEach(ev => stage.addEventListener(ev, e => {
+      e.preventDefault(); e.stopPropagation(); stage.style.outline = '2px solid var(--c-accent)';
+    }));
+    ['dragleave','drop'].forEach(ev => stage.addEventListener(ev, e => {
+      e.preventDefault(); e.stopPropagation(); stage.style.outline = '';
+    }));
+    stage.addEventListener('drop', e => {
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!f) return;
+      if (!/^image\/(png|jpeg|webp)$/i.test(f.type)) { alert('Please drop a PNG, JPEG, or WebP image.'); return; }
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const img = new Image();
+        img.onload = () => { state.image = img; cropperWrap.style.display = 'block'; resetBtn.style.display = 'inline-flex'; if (largeWrap) largeWrap.style.display = 'none'; fitToCover(); };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(f);
+    });
+  }
+
+  if (form) {
+    form.addEventListener('submit', ev => {
+      // If the user has loaded an image into cropper, export final cropped circle PNG as dataURL
+      if (state.image) {
+        try {
+          avatarDataField.value = exportCroppedCirclePng();
+        } catch (err) {
+          ev.preventDefault();
+          alert('Could not process your avatar: ' + err.message);
+          return;
+        }
+      } else if (resetBtn && resetBtn.style.display !== 'none' && !avatarDataField.value) {
+        // User pressed reset without picking a new image — nothing to save
+      }
+    });
+  }
+})();
+</script>

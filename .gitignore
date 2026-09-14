@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Environment (contains secrets – never commit this)
+.env
+
+# Data files (sessions, user registry, pages, uploads – contains secrets/PII)
+data/
+!data/pages/.gitkeep
+!data/uploads/.gitkeep
+!data/sessions/.gitkeep
+
+# Test files
+test_files/
+
+# OS artefacts
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/
+.idea/

@@ -1,0 +1,11 @@
+<div class="error-view">
+  <div class="error-code" aria-hidden="true"><%= statusCode || 500 %></div>
+  <h1 class="error-title">
+    <% if (statusCode === 404) { %>Page Not Found<% } else { %>Something Went Wrong<% } %>
+  </h1>
+  <p class="error-message"><%= message %></p>
+  <div class="error-actions">
+    <a href="/" class="btn btn-primary">Go to Home</a>
+    <a href="javascript:history.back()" class="btn btn-ghost">Go Back</a>
+  </div>
+</div>

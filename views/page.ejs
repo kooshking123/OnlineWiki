@@ -1,0 +1,213 @@
+<!-- Header -->
+<div class="view-header view-header-page">
+  <div class="view-header-left">
+
+    <!-- Hierarchical breadcrumb -->
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="/">Home</a>
+      <% ancestors.forEach(a => { %>
+        <span class="breadcrumb-sep" aria-hidden="true">/</span>
+        <a href="/pages/<%= a.slug %>"><%= a.title %></a>
+      <% }); %>
+      <span class="breadcrumb-sep" aria-hidden="true">/</span>
+      <span aria-current="page"><%= page.title %></span>
+    </nav>
+
+    <h1 class="view-title"><%= page.title %></h1>
+
+    <!-- Meta bar -->
+    <div class="page-meta-bar">
+      <span class="meta-item">
+        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        <%= page.authorDisplay || page.author %>
+      </span>
+      <% if (page.lastEditor && page.lastEditor !== page.author) { %>
+        <span class="meta-sep" aria-hidden="true">·</span>
+        <span class="meta-item">
+          Updated by <%= page.lastEditorDisplay || page.lastEditor %>
+        </span>
+      <% } %>
+      <span class="meta-sep" aria-hidden="true">·</span>
+      <span class="meta-item">
+        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        <time datetime="<%= page.updatedAt %>">
+          <%= new Date(page.updatedAt).toLocaleDateString(undefined,{year:'numeric',month:'long',day:'numeric'}) %>
+        </time>
+      </span>
+      <% if (page.tags && page.tags.length) { %>
+        <span class="meta-sep" aria-hidden="true">·</span>
+        <div class="page-meta-tags">
+          <% page.tags.forEach(t => { %><span class="tag"><%= t %></span><% }); %>
+        </div>
+      <% } %>
+      <% if (ancestors.length > 0) { %>
+        <span class="meta-sep" aria-hidden="true">·</span>
+        <span class="meta-item meta-level-badge">
+          <%= ['Section','Chapter','Topic','Subtopic'][ancestors.length] || 'Page' %>
+        </span>
+      <% } %>
+    </div>
+  </div>
+
+  <!-- Page actions -->
+  <div class="page-header-actions">
+    <% const canEdit = user && (user.role === 'editor' || user.role === 'administrator'); %>
+    <% if (canEdit) { %>
+    <% if (canMoveUp) { %>
+      <form method="POST" action="/pages/<%= page.slug %>/move" style="display:inline">
+        <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+        <input type="hidden" name="direction" value="up" />
+        <button type="submit" class="btn btn-sm btn-ghost" title="Move up among siblings" aria-label="Move page up">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="18 15 12 9 6 15"/></svg>
+        </button>
+      </form>
+    <% } %>
+    <% if (canMoveDown) { %>
+      <form method="POST" action="/pages/<%= page.slug %>/move" style="display:inline">
+        <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+        <input type="hidden" name="direction" value="down" />
+        <button type="submit" class="btn btn-sm btn-ghost" title="Move down among siblings" aria-label="Move page down">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+      </form>
+    <% } %>
+    <a href="/pages/new?parent=<%= page.slug %>" class="btn btn-sm btn-secondary">
+      <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      Add child
+    </a>
+    <a href="/pages/<%= page.slug %>/edit" class="btn btn-sm btn-primary">
+      <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+      Edit
+    </a>
+    <% } /* end canEdit */ %>
+  </div>
+</div>
+
+<!-- Wiki content -->
+<article class="wiki-content" aria-labelledby="pageTitle" id="pageTitle">
+  <%- page.content || '<p class="wiki-empty">This page has no content yet.</p>' %>
+</article>
+
+<!-- ── In This Section (children) ─────────────────────────────────────────────── -->
+<% if (children && children.length > 0) { %>
+<section class="children-section" aria-labelledby="childrenHeading">
+  <div class="children-section-header">
+    <h2 class="children-section-title" id="childrenHeading">
+      In This Section
+      <span class="children-count-badge"><%= children.length %></span>
+    </h2>
+    <% if (canEdit) { %>
+    <a href="/pages/new?parent=<%= page.slug %>" class="btn btn-sm btn-ghost">
+      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      Add page
+    </a>
+    <% } %>
+  </div>
+  <div class="children-grid">
+    <% children.forEach(child => { %>
+      <a href="/pages/<%= child.slug %>" class="child-card">
+        <div class="child-card-body">
+          <span class="child-card-title"><%= child.title %></span>
+          <% if (child.tags && child.tags.length) { %>
+            <div class="child-card-tags">
+              <% child.tags.slice(0,3).forEach(t => { %><span class="tag"><%= t %></span><% }); %>
+            </div>
+          <% } %>
+          <div class="child-card-meta">
+            <% if (child.children && child.children.length) { %>
+              <span class="child-sub-count">
+                <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+                <%= child.children.length %> sub-page<%= child.children.length !== 1 ? 's' : '' %>
+              </span>
+            <% } %>
+            <span>
+              <%= new Date(child.updatedAt).toLocaleDateString(undefined,{month:'short',day:'numeric'}) %>
+            </span>
+          </div>
+        </div>
+        <svg class="child-card-arrow" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+      </a>
+    <% }); %>
+  </div>
+</section>
+<% } %>
+
+<!-- ── Attachments ──────────────────────────────────────────────────────────── -->
+<% if (attachments && attachments.length > 0) { %>
+<section class="attachments-section" aria-labelledby="attachHeading">
+  <h2 class="attachments-heading" id="attachHeading">
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+    Attachments
+    <span class="badge"><%= attachments.length %></span>
+  </h2>
+  <ul class="attachment-list" aria-label="Attached documents">
+    <% attachments.forEach(a => { %>
+      <li class="attachment-item <%= a.exists ? '' : 'attachment-missing' %>">
+        <span class="attachment-item-icon" aria-hidden="true"><%= a.icon %></span>
+        <div class="attachment-item-info">
+          <span class="attachment-item-name"><%= a.originalName %></span>
+          <span class="attachment-item-size"><%= a.size %></span>
+        </div>
+        <% if (a.exists) { %>
+          <a href="/uploads/download/<%= a.name %>"
+             class="btn btn-sm btn-secondary"
+             download="<%= a.originalName %>"
+             aria-label="Download <%= a.originalName %>">
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Download
+          </a>
+        <% } else { %>
+          <span class="badge badge-warn">Missing</span>
+        <% } %>
+      </li>
+    <% }); %>
+  </ul>
+</section>
+<% } %>
+
+<!-- Delete modal -->
+<div class="modal-overlay hidden" id="deletePageModal" role="dialog" aria-modal="true" aria-labelledby="deletePageModalTitle">
+  <div class="modal">
+    <div class="modal-danger-icon" aria-hidden="true">
+      <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+    </div>
+    <h2 class="modal-title" id="deletePageModalTitle">Delete Page</h2>
+    <% if (children && children.length > 0) { %>
+      <p class="modal-body">
+        <strong><%= page.title %></strong> has <strong><%= children.length %></strong> child page<%= children.length !== 1 ? 's' : '' %>.
+        Deleting it will move those child pages up to become children of <strong><%= ancestors.length ? ancestors[ancestors.length-1].title : 'the root level' %></strong>.
+        This action cannot be undone.
+      </p>
+    <% } else { %>
+      <p class="modal-body">
+        Are you sure you want to delete <strong><%= page.title %></strong>? This action cannot be undone.
+      </p>
+    <% } %>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="cancelDeletePageBtn">Cancel</button>
+      <form action="/pages/<%= page.slug %>/delete" method="POST" style="margin:0">
+        <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+        <button type="submit" class="btn btn-danger">Delete Page</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+  const deleteModal     = document.getElementById('deletePageModal');
+  const cancelDeleteBtn = document.getElementById('cancelDeletePageBtn');
+
+  // Trigger delete modal from edit bar if user navigates there
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') deleteModal && deleteModal.classList.add('hidden');
+  });
+  if (cancelDeleteBtn) {
+    cancelDeleteBtn.addEventListener('click', () => deleteModal.classList.add('hidden'));
+  }
+  deleteModal && deleteModal.addEventListener('click', e => {
+    if (e.target === deleteModal) deleteModal.classList.add('hidden');
+  });
+
+  // Expose trigger globally so the edit bar can call it
+  window.openDeletePageModal = () => deleteModal && deleteModal.classList.remove('hidden');
+</script>

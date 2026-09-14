@@ -1,0 +1,88 @@
+<% const s = typeof settings !== 'undefined' && settings ? settings : { siteTitle: 'OnlineWiki', siteTagline: 'Internal knowledge base and collaborative wiki' }; %>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign In — <%= s.siteTitle %></title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body class="login-body">
+
+  <!-- Animated background blobs -->
+  <div class="login-bg" aria-hidden="true">
+    <div class="login-blob login-blob-1"></div>
+    <div class="login-blob login-blob-2"></div>
+    <div class="login-blob login-blob-3"></div>
+  </div>
+
+  <div class="login-wrap">
+    <div class="login-card" role="main">
+
+      <!-- Logo -->
+      <div class="login-logo" aria-label="<%= s.siteTitle %>">
+        <span class="login-logo-icon" aria-hidden="true">📚</span>
+        <h1 class="login-title"><%= s.siteTitle %></h1>
+        <p class="login-subtitle"><%= s.siteTagline %></p>
+      </div>
+
+      <!-- Flash error -->
+      <% if (flash && flash.error && flash.error.length) { %>
+        <div class="flash flash-error" role="alert">
+          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <%= flash.error[0] %>
+        </div>
+      <% } %>
+
+      <!-- Login form -->
+      <form action="/login" method="POST" class="login-form" id="loginForm" novalidate>
+        <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+        <div class="form-group">
+          <label class="form-label" for="username">Username</label>
+          <input
+            type="text"
+            id="username"
+            name="username"
+            class="form-input"
+            placeholder="username or domain\username"
+            autocomplete="username"
+            spellcheck="false"
+            required
+            autofocus
+          />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="password">Password</label>
+          <input
+            type="password"
+            id="password"
+            name="password"
+            class="form-input"
+            placeholder="••••••••"
+            autocomplete="current-password"
+            required
+          />
+        </div>
+        <button type="submit" class="btn btn-primary btn-full btn-lg" id="loginBtn">
+          <span class="btn-label">Sign In</span>
+          <svg class="btn-arrow" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+        </button>
+      </form>
+
+      <p class="login-help">Contact your IT administrator if you need access.</p>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', function () {
+      const btn   = document.getElementById('loginBtn');
+      const label = btn.querySelector('.btn-label');
+      btn.disabled   = true;
+      label.textContent = 'Signing in…';
+    });
+  </script>
+</body>
+</html>
