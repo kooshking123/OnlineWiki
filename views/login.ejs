@@ -39,7 +39,7 @@
 
       <!-- Login form -->
       <form action="/login" method="POST" class="login-form" id="loginForm" novalidate>
-        <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
         <div class="form-group">
           <label class="form-label" for="username">Username</label>
           <input

@@ -753,7 +753,17 @@ a.user-chip-link:hover {
 .page-header-actions {
   flex-shrink: 0;
   display: flex;
+  align-items: center;
   gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.page-actions-sep {
+  display: inline-block;
+  width: 1px;
+  align-self: stretch;
+  margin: 0 0.25rem;
+  background: var(--c-border-muted);
 }
 
 .page-meta-bar {
@@ -973,6 +983,11 @@ a.user-chip-link:hover {
   margin: 0;
 }
 .editor-widget-info { }
+.editor-widget-danger {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--c-border));
+  background: color-mix(in srgb, var(--danger) 6%, var(--c-bg-subtle));
+}
+.editor-widget-danger .editor-widget-title { color: var(--danger); }
 
 .info-dl {
   display: grid;

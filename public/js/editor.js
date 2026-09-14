@@ -167,8 +167,40 @@
   // ── Before submit: ensure TinyMCE content is written to the textarea ─────
   const pageForm = document.getElementById('pageForm');
   if (pageForm) {
-    pageForm.addEventListener('submit', () => {
+    pageForm.addEventListener('submit', function (e) {
       tinymce.triggerSave();
+
+      const titleInput = document.getElementById('pageTitle');
+      const confirmInput = document.getElementById('confirmDuplicate');
+      const selfSlug = (window.WIKI && window.WIKI.slug) ? window.WIKI.slug : '';
+      const originalTitle = (window.WIKI && window.WIKI.originalTitle ? window.WIKI.originalTitle : '').trim().toLowerCase();
+      const existingTitles = (window.WIKI && window.WIKI.existingTitles) ? window.WIKI.existingTitles : [];
+
+      if (titleInput && confirmInput) {
+        const newTitle = (titleInput.value || '').trim();
+        const newTitleLower = newTitle.toLowerCase();
+        const isNewPage = !window.WIKI || !!window.WIKI.isNew;
+        // Only prompt if title differs from self's existing title (edit) or on new (create)
+        const titleChanged = isNewPage || (newTitleLower !== originalTitle);
+        if (newTitle && titleChanged) {
+          const dup = existingTitles.find(t => {
+            if (!t || !t.title) return false;
+            const slugMatch = t.slug === selfSlug;
+            const titleMatch = String(t.title).trim().toLowerCase() === newTitleLower;
+            return titleMatch && !slugMatch;
+          });
+          if (dup && confirmInput.value !== 'true') {
+            const msg = 'Another page titled "' + dup.title +
+              '" already exists (slug: /pages/' + dup.slug + ').\n\nSave anyway with a duplicate title?';
+            const ok = confirm(msg);
+            if (ok) {
+              confirmInput.value = 'true';
+            } else {
+              e.preventDefault();
+            }
+          }
+        }
+      }
     });
   }
 

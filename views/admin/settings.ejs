@@ -27,7 +27,7 @@
 %>
 
 <form method="POST" action="/admin/settings" class="card settings-card" id="settingsForm" novalidate>
-  <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
 
   <div class="settings-section">
     <h2 class="settings-section-title">Branding</h2>

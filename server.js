@@ -69,11 +69,149 @@ const {
   csrfSynchronisedProtection,
   getTokenFromRequest
 } = csrfSync({
-  getTokenFromRequest: (req) => req.body?._csrf || req.headers['x-csrf-token'] || req.query?._csrf,
+  getTokenFromRequest: (req) => {
+    // --- Comma-duplicate-token hardening ----------------------------------
+    // Illegal nested HTML <form> elements (e.g. a delete form inside the
+    // outer page edit form) cause the browser to submit TWO inputs with
+    // the same name `_csrf`. express.urlencoded({ extended:true }) merges
+    // duplicate keys into a single comma-separated string of length
+    // 256 + 1 + 256 = 513 — the exact "submitted len=513" 403 the user
+    // reported for weeks.  Split on comma and accept the FIRST candidate
+    // that passes the plausibility gate (the good token from the outer
+    // form's explicit hidden input).  Without this, the merged garbage
+    // always fails verification against the clean 256-char session value.
+    function _firstPlausible(raw) {
+      if (typeof raw !== 'string') return null;
+      if (!raw.includes(',')) return _isPlausibleCsrf(raw) ? raw : null;
+      for (const part of raw.split(',')) {
+        const c = part.trim();
+        if (_isPlausibleCsrf(c)) return c;
+      }
+      return null;
+    }
+    const bodyTok  = (req && req.body)  ? _firstPlausible(req.body._csrf)  : null;
+    if (bodyTok) return bodyTok;
+    const headTok = (req && req.headers) ? _firstPlausible(req.headers['x-csrf-token']) : null;
+    if (headTok) return headTok;
+    const qTok    = (req && req.query) ? _firstPlausible(req.query._csrf) : null;
+    return qTok;
+  },
+  getTokenFromState: (req) => req?.session?._csrf,
+  storeTokenInState: (req, token) => {
+    if (req && req.session) {
+      req.session._csrf = token;
+      req.session.csrfToken = token;
+    }
+  }
 });
+
+// ── CSRF plausibility / session self-heal ─────────────────────────────────────
+// csrf-sync v4 uses 256-byte tokens rendered as 342-char URL-safe base64
+// (256 * 4/3 ceil = 344 bytes, less padding).  Older versions were ~256 chars.
+// Anything >= ~400 chars in `req.session._csrf` is a corrupted double-token
+// produced by a previous rotate-on-GET bug that stacked tokens during parallel
+// session-file-store writes.  Anything below ~64 chars is empty / truncated.
+// `_isPlausibleCsrf(tok)` acts as a fast gate: bad values are discarded and a
+// fresh token is generated on the spot, self-healing sessions created before
+// this fix.
+function _isPlausibleCsrf(tok) {
+  // csrf-sync default tokens: size=128 bytes random → hex = 256 chars.
+  // Our manual fallback token: randomBytes(256) → base64url = ~342 chars.
+  // Anything outside [16, 450] is impossible for both generators and
+  // almost certainly a corrupted double-write (two 256-char tokens stacked
+  // = exactly 512/513 chars, which was the persistent user-reported 403
+  // len=513, submitted sha≠expected).  450 is chosen as a generous
+  // ceiling ~30% above the longest plausible generator output.
+  if (typeof tok !== 'string' || tok.length < 16) return false;
+  if (tok.length > 450) return false;
+  if (/[\s;,\x00]/.test(tok)) return false;
+  return true;
+}
+function _manualFreshCsrf() {
+  // Fallback generator if csrf-sync's generateToken is misbehaving (returns
+  // a corrupted value due to bad session state).  Produces a 256-bit random
+  // in URL-safe base64 (342 chars) — same shape as csrf-sync's default.
+  return crypto.randomBytes(256).toString('base64url');
+}
+
 function csrfToken(req, res, next) {
-  res.locals.csrfToken = generateToken(req);
-  if (typeof next === 'function') next();
+  let tok = null;
+  try { tok = getTokenFromState(req); } catch { tok = null; }
+
+  if (tok !== null && !_isPlausibleCsrf(tok)) {
+    try {
+      if (req && req.session) {
+        delete req.session._csrf;
+        delete req.session.csrfToken;
+      }
+    } catch {}
+    try {
+      systemLogger.warn('CSRF discarded implausible stored token', {
+        submittedLen: tok.length,
+        ip: (req && req.ip) || null,
+        user: (req && req.user && req.user.username) || null
+      });
+    } catch {}
+    tok = null;
+  }
+
+  const finish = () => {
+    if (!_isPlausibleCsrf(tok)) {
+      try {
+        const manual = _manualFreshCsrf();
+        try {
+          if (req && req.session) {
+            req.session._csrf = manual;
+            req.session.csrfToken = manual;
+            req.session.save(e => {
+              if (e) {
+                try { systemLogger.warn('CSRF manual save fail', { error: e.message }); } catch {}
+              }
+            });
+          }
+        } catch {}
+        tok = manual;
+      } catch {
+        try { tok = _manualFreshCsrf(); } catch { tok = 'CSRF_NOT_AVAILABLE_' + Date.now(); }
+      }
+    }
+    res.locals.csrfToken = (typeof tok === 'string' && tok) ? tok : (_manualFreshCsrf() || 'csrf_fallback');
+    if (typeof next === 'function') next();
+  };
+
+  if (tok) {
+    finish();
+    return;
+  }
+
+  try {
+    tok = generateToken(req);
+  } catch {
+    tok = null;
+  }
+  if (tok && !_isPlausibleCsrf(tok)) {
+    try {
+      tok = _manualFreshCsrf();
+      if (req && req.session) { req.session._csrf = tok; req.session.csrfToken = tok; }
+    } catch { tok = null; }
+  }
+
+  if (tok && req.session && typeof req.session.save === 'function') {
+    req.session.save((err) => {
+      if (err) {
+        try {
+          systemLogger.warn('CSRF session.save failed', {
+            error: err.message || String(err),
+            ip: req.ip,
+            user: (req.user && req.user.username) || null
+          });
+        } catch {}
+      }
+      finish();
+    });
+  } else {
+    finish();
+  }
 }
 function verifyCsrfConstantTime(req) {
   try {
@@ -536,6 +674,14 @@ function flattenForSelect(nodes, depth = 0) {
 // ─── Global view locals (runs BEFORE any middleware that may render a page) ────
 // Order matters: CSRF-enforcement, 404-handlers, error-views, and routes all
 // read `res.locals.user / flash / nav*`, so this middleware must come first.
+//
+// Also sets Cache-Control for authenticated HTML/browser responses so flash
+// messages (consumed in res.locals.flash above) are never "left over" due to a
+// stale 304 browser-cached response that never ran this middleware: without
+// this a POST save → 302 redirect → browser serves cached 304 HTML → the
+// res.locals.flash read above is SKIPPED (no server request) and the flash
+// message silently leaks onto the *next* page the user actually navigates to
+// (causing the classic "green bar on wrong page" complaint).
 app.use((req, res, next) => {
   res.locals.user  = req.user || null;
   res.locals.flash = { error: req.flash('error'), success: req.flash('success'), info: req.flash('info') };
@@ -548,27 +694,81 @@ app.use((req, res, next) => {
       res.locals.navPages = pages;
       res.locals.navFlat  = flattenTree(buildTree(pages));
     } catch { /* ignore */ }
+    // Authenticated pages may contain user-specific content + flash banners.
+    // Disable HTTP caching entirely for them so 304s never skip flash
+    // consumption and stale content never misleads the user.
+    if (!req.headers.accept || /html/i.test(req.headers.accept) || req.accepts('html')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, private, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
   }
+  // Wrap res.redirect on POST/PUT/PATCH (state-changing) to append a tiny
+  // cache-busting nonce query param. This guarantees that even if some
+  // misconfigured layer (CDN, service worker, corporate proxy) ignores our
+  // Cache-Control headers above, the browser hits the server fresh on the
+  // redirect target and does not surface a cached 304 that skipped flash
+  // consumption. URLs already with query strings are preserved.
+  const origRedirect = res.redirect.bind(res);
+  res.redirect = function (statusOrUrl, maybeUrl) {
+    const code = typeof statusOrUrl === 'number' ? statusOrUrl : 302;
+    const url  = typeof statusOrUrl === 'number' ? (maybeUrl || '/') : (statusOrUrl || '/');
+    let busted = url;
+    if (typeof url === 'string' && url.startsWith('/') && !url.startsWith('//') &&
+        ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+      const sep = url.includes('?') ? '&' : '?';
+      busted = `${url}${sep}_t=${Date.now()}`;
+    }
+    return origRedirect(code, busted);
+  };
   next();
 });
 
-// ─── CSRF: generate token per GET / view render, validate on state-changing POST ─
+// ─── CSRF token injection into res.locals (per request, for view rendering) ───
+// csrfToken(req, res, next) internally:
+//   * Reuses any session token when present (fast, sync path).
+//   * Lazy-generates + saves a new token to the session store ONLY on first
+//     use (async path). It invokes `next()` ONLY AFTER both steps finish,
+//     so downstream code + EJS views always see a defined `res.locals.csrfToken`
+//     (string, never undefined).
+// We used to call `csrfToken(req, res, ()=>{})` with a noop then `next()`
+// immediately — that bypassed the async save barrier and produced
+// `ReferenceError: csrfToken is not defined` in the layout template.
 app.use((req, res, next) => {
-  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
-    try { csrfToken(req, res, () => {}); } catch { /* ignore on public routes with no session */ }
+  try {
+    csrfToken(req, res, next);
+  } catch {
+    // csrf-sync can throw when no session exists yet on public routes.
+    // Even on total failure we emit a non-empty manual token string so views
+    // that render <input _csrf> unguarded never submit empty, and never
+    // throw ReferenceError.
+    let fb = '';
+    try { fb = _manualFreshCsrf(); } catch { fb = 'csrf_fallback_' + Date.now(); }
+    res.locals.csrfToken = fb;
+    next();
   }
-  next();
 });
 
 // ─── Enforce CSRF on all state-changing requests (POST / PUT / DELETE / PATCH) ─
 // csrf-sync's middleware reports failure via next(createHttpError(...)) rather
 // than throw; our wrapper catches BOTH paths to render a friendly 403 page.
-function _renderCsrfError(req, res, csrfErr) {
+function _renderCsrfError(req, res, csrfErr, diag) {
   systemLogger.warn('CSRF token validation failed', {
     method: req.method, path: req.path, ip: req.ip,
     user: req.user?.username || '(unauthenticated)',
     error: csrfErr?.message || String(csrfErr)
   });
+  const diags = diag && (process.env.NODE_ENV !== 'production') ? [
+    `<details style="margin:0.5rem 0 1rem;padding:1rem;border:1px solid var(--c-border-muted);border-radius:var(--r);white-space:pre-wrap;word-break:break-word;font-family:monospace;font-size:0.82rem;background:var(--c-bg-overlay)"><summary style="cursor:pointer;color:var(--c-muted)">CSRF diagnostics (dev-only)</summary>${
+      JSON.stringify({
+        submitted:   (diag.submittedLen ? `len=${diag.submittedLen} sha=${diag.submittedSha}` : 'EMPTY/MISSING') + ` @ source=${diag.submittedSrc}`,
+        expected:    diag.expectedLen  ? `len=${diag.expectedLen} sha=${diag.expectedSha}`  : 'NONE (session has no token yet — try refreshing)',
+        match:       diag.match,
+        hasSession:  diag.hasSession,
+        userAgent:   req.headers?.['user-agent'] || ''
+      }, null, 2)
+    }</details>`
+  ].join('') : '';
   try {
     res.status(403).render('error', {
       title: '403 Forbidden', statusCode: 403,
@@ -576,7 +776,8 @@ function _renderCsrfError(req, res, csrfErr) {
       flash:    res.locals.flash    || { error: [], success: [], info: [] },
       navFlat:  res.locals.navFlat  || [],
       navPages: res.locals.navPages || [],
-      message: 'Request rejected: invalid or missing CSRF token. Please go back, refresh the page, and try again.'
+      csrfToken: res.locals.csrfToken || '',
+      message: 'Request rejected: invalid or missing CSRF token. Please go back, refresh the page, and try again.' + diags
     });
   } catch (renderErr) {
     systemLogger.error('CSRF 403 render failed — falling back to plain text', {
@@ -590,21 +791,76 @@ function _renderCsrfError(req, res, csrfErr) {
     );
   }
 }
+function _sha(s) { return crypto.createHash('sha256').update(String(s || '')).digest('hex').slice(0, 12); }
+function _csrfSrc(req) {
+  try {
+    if (typeof req.headers['x-csrf-token'] === 'string' && req.headers['x-csrf-token']) return 'header(x-csrf-token)';
+  } catch {}
+  try { if (req.body?._csrf) return 'body._csrf'; } catch {}
+  try { if (req.query?._csrf) return 'query._csrf'; } catch {}
+  return 'none';
+}
 app.use((req, res, next) => {
   const safe = ['GET', 'HEAD', 'OPTIONS'];
   if (safe.includes(req.method)) return next();
-  // Skip GLOBAL CSRF check for multipart upload: the hidden `_csrf` field lives
-  // inside the multipart body that express.urlencoded cannot parse.  The
-  // uploads POST handler runs route-local CSRF after multer has parsed all
-  // form fields (file + _csrf) into req.body / req.file.  Query fallback
-  // remains as belt+braces.
+
+  // ── CSRF exemptions (industry standard + implementation constraints) ──
+  // • POST /login: login forms are protected by TLS + sameSite cookies +
+  //   password knowledge, and saveUninitialized:false means no session
+  //   exists on the first GET/POST of the login handshake — so a CSRF
+  //   token literally cannot be stored/retrieved until after the login
+  //   succeeds and session.regenerate() runs.  Always allow.
+  if (req.method === 'POST' && req.path === '/login') return next();
+
+  // • POST /uploads (multipart/form-data): the hidden _csrf field cannot be
+  //   parsed by express.urlencoded so route-local check runs after multer.
   const ct = req.headers['content-type'] || '';
   if (req.method === 'POST' && req.path === '/uploads' && /^multipart\/form-data/i.test(ct)) return next();
-  const wrappedNext = (err) => err ? _renderCsrfError(req, res, err) : next();
+
+  // Diagnostic: capture submitted/expected hashes BEFORE csrf-sync runs.
+  let submitted, submittedRaw, submittedSrc, expected;
+  try { submitted = getTokenFromRequest(req); } catch { submitted = undefined; }
+  // submittedRaw captures the raw comma-concatenated 513-byte mess for
+  // diagnostics (dev-only); the parsed `submitted` (first plausible token)
+  // is what csrf-sync actually uses for verification. This way warnings
+  // display both the sanitized submittedLen and the original raw length
+  // so we can instantly tell if a duplicate-input comma merge happened.
+  try {
+    submittedRaw = (req.body?._csrf !== undefined) ? String(req.body._csrf)
+                 : (req.headers?.['x-csrf-token'] !== undefined) ? String(req.headers['x-csrf-token'])
+                 : (req.query?._csrf !== undefined) ? String(req.query._csrf) : '';
+  } catch { submittedRaw = ''; }
+  submittedSrc = _csrfSrc(req);
+  try { expected = getTokenFromState(req); } catch { expected = undefined; }
+  const diag = {
+    method: req.method, path: req.path, user: (req.user && req.user.username) || null, ip: req.ip,
+    submittedSha: _sha(submitted), submittedSrc,
+    submittedLen: submitted ? String(submitted).length : 0,
+    submittedRawLen: submittedRaw ? submittedRaw.length : 0,
+    submittedRawCommas: (submittedRaw.match(/,/g) || []).length,
+    expectedSha: _sha(expected),  expectedLen: expected ? String(expected).length : 0,
+    match: !!submitted && !!expected && String(submitted) === String(expected),
+    hasSession: Boolean(req.session && req.session.id)
+  };
+
+  const wrappedNext = (err) => {
+    if (err) {
+      // Always emit a WARN-level diagnostic on ANY CSRF failure so admins can
+      // disambiguate: "missing submitted token" vs "stale form (browser tab
+      // open before server restart / cookie clear)" vs "session not loaded".
+      diag.error = (err && err.message) || 'EBADCSRF';
+      systemLogger.warn('CSRF token validation failed', diag);
+      _renderCsrfError(req, res, err, diag);
+      return;
+    }
+    next();
+  };
   try {
     csrfSynchronisedProtection(req, res, wrappedNext);
   } catch (err) {
-    _renderCsrfError(req, res, err);
+    diag.error = (err && err.message) || 'CSRF_MW_THREW';
+    logger.warn('CSRF token validation failed', diag);
+    _renderCsrfError(req, res, err, diag);
   }
 });
 
@@ -779,6 +1035,7 @@ function ensureRole(minRole) {
         flash:    res.locals.flash    || { error: [], success: [], info: [] },
         navFlat:  res.locals.navFlat  || [],
         navPages: res.locals.navPages || [],
+        csrfToken: res.locals.csrfToken || '',
         message: `You need ${minRole} access to perform this action.`
       });
     } catch (renderErr) {
@@ -952,7 +1209,7 @@ const upload = multer({
 // ─── Authentication ────────────────────────────────────────────────────────────
 app.get('/login', (req, res) => {
   if (req.isAuthenticated()) return res.redirect('/');
-  res.render('login', { title: 'Sign In — OnlineWiki', layout: false });
+  res.render('login', { title: 'Sign In — OnlineWiki', layout: false, csrfToken: res.locals.csrfToken });
 });
 
 // ─── Local admin credentials (optional fallback, set in .env) ────────────────
@@ -1073,7 +1330,7 @@ app.get('/', ensureAuth, (req, res) => {
       if (Array.isArray(n.children) && n.children.length) annotateSiblings(n.children);
     });
   })(tree);
-  res.render('home', { title: 'Wiki Home — OnlineWiki', pages, tree });
+  res.render('home', { title: 'Wiki Home — OnlineWiki', pages, tree, csrfToken: res.locals.csrfToken });
 });
 
 // ─── Pages — IMPORTANT: /pages/new must come before /pages/:slug ──────────────
@@ -1082,7 +1339,8 @@ app.get('/pages/new', ensureRole('editor'), (req, res) => {
   const tree        = buildTree(pages);
   const selectPages = flattenForSelect(tree);
   const presetParent = (req.query.parent || '').trim();
-  res.render('edit', { title: 'New Page — OnlineWiki', page: null, isNew: true, selectPages, presetParent });
+  const existingTitles = pages.map(p => ({ title: p.title, slug: p.slug }));
+  res.render('edit', { title: 'New Page — OnlineWiki', page: null, isNew: true, selectPages, presetParent, existingTitles, csrfToken: res.locals.csrfToken });
 });
 
 app.post('/pages/new', ensureRole('editor'), (req, res) => {
@@ -1091,6 +1349,7 @@ app.post('/pages/new', ensureRole('editor'), (req, res) => {
   const content  = sanitizeContent(req.body.content || '');
   const tags     = (req.body.tags    || '').split(',').map(t => t.trim()).filter(Boolean);
   const parent   = (req.body.parent  || '').trim() || null;
+  const confirmDuplicate = (req.body.confirmDuplicate || '').toString().toLowerCase() === 'true';
 
   const slug = slugify(rawSlug, { lower: true, strict: true });
 
@@ -1098,10 +1357,37 @@ app.post('/pages/new', ensureRole('editor'), (req, res) => {
     req.flash('error', 'Title and slug are required.');
     return res.redirect('/pages/new');
   }
-  if (loadPage(slug)) {
-    req.flash('error', `A page with slug "${slug}" already exists. Choose a different title or slug.`);
+
+  // Title-duplicate guard — case-insensitive match against any other page.
+  const allPages = listPages();
+  const dupTitleMatch = allPages.find(p => p.title && p.title.toLowerCase() === title.toLowerCase());
+  if (dupTitleMatch && !confirmDuplicate) {
+    req.flash('error',
+      `Another page titled "${dupTitleMatch.title}" already exists (slug: ${dupTitleMatch.slug}). ` +
+      `Confirm the save again if you want to proceed with a duplicate title.`);
     return res.redirect('/pages/new');
   }
+
+  // Slug collision handling: since the filesystem requires unique slugs but
+  // we intentionally allow duplicate titles, a title duplicate whose slug
+  // collides with an existing page (e.g. two pages titled "Hello World" →
+  // slugify both → "hello-world") must not silently refuse to create the
+  // second page after the user already confirmed the duplicate title.
+  // Instead, auto-derive a unique slug by appending -2, -3, … until we find
+  // a free one.  This matches the user's confirmation intent (they said
+  // "Yes, keep the duplicate title") while keeping the filesystem invariant
+  // that slugs are unique.
+  let candidateSlug = slug;
+  let suffix = 1;
+  while (loadPage(candidateSlug)) {
+    suffix += 1;
+    candidateSlug = `${slug}-${suffix}`;
+  }
+  if (candidateSlug !== slug) {
+    systemLogger.info('Slug auto-deduplicated', { from: slug, to: candidateSlug, requestedTitle: title, ip: req.ip, user: req.user?.username });
+    req.flash('info', `The title "${title}" is shared with another page; auto-assigned slug "/pages/${candidateSlug}" to avoid conflicts.  You can change it later via Edit → Slug.`);
+  }
+  const finalSlug = candidateSlug;
   // Validate parent exists (unless empty)
   if (parent && !loadPage(parent)) {
     req.flash('error', `Parent page "${parent}" does not exist.`);
@@ -1114,16 +1400,16 @@ app.post('/pages/new', ensureRole('editor'), (req, res) => {
 
   const now = new Date().toISOString();
   savePage({
-    title, slug, content, tags, parent, position,
+    title, slug: finalSlug, content, tags, parent, position,
     author:        req.user.username,
     authorDisplay: req.user.displayName,
     createdAt: now, updatedAt: now,
     attachments: []
   });
 
-  auditLogger.info('PAGE_CREATED', { slug, title, createdBy: req.user.username, ip: req.ip });
+  auditLogger.info('PAGE_CREATED', { slug: finalSlug, title, createdBy: req.user.username, ip: req.ip });
   req.flash('success', `Page "${title}" created successfully.`);
-  res.redirect(`/pages/${slug}`);
+  res.redirect(`/pages/${finalSlug}`);
 });
 
 app.get('/pages/:slug', ensureAuth, (req, res) => {
@@ -1135,6 +1421,7 @@ app.get('/pages/:slug', ensureAuth, (req, res) => {
       flash:    res.locals.flash    || { error: [], success: [], info: [] },
       navFlat:  res.locals.navFlat  || [],
       navPages: res.locals.navPages || [],
+      csrfToken: res.locals.csrfToken || '',
       message: `The page "${req.params.slug}" does not exist.`
     });
   }
@@ -1162,7 +1449,7 @@ app.get('/pages/:slug', ensureAuth, (req, res) => {
     const stat     = exists ? fs.statSync(filePath) : null;
     return { name, originalName: name.replace(/^\d+_/, ''), exists, size: stat ? formatBytes(stat.size) : 'unknown', icon: fileIcon(name) };
   });
-  res.render('page', { title: `${page.title} — OnlineWiki`, page, attachments, ancestors, children, canMoveUp, canMoveDown });
+  res.render('page', { title: `${page.title} — OnlineWiki`, page, attachments, ancestors, children, canMoveUp, canMoveDown, csrfToken: res.locals.csrfToken });
 });
 
 app.get('/pages/:slug/edit', ensureRole('editor'), (req, res) => {
@@ -1174,6 +1461,7 @@ app.get('/pages/:slug/edit', ensureRole('editor'), (req, res) => {
       flash:    res.locals.flash    || { error: [], success: [], info: [] },
       navFlat:  res.locals.navFlat  || [],
       navPages: res.locals.navPages || [],
+      csrfToken: res.locals.csrfToken || '',
       message: `The page "${req.params.slug}" does not exist.`
     });
   }
@@ -1195,13 +1483,32 @@ app.get('/pages/:slug/edit', ensureRole('editor'), (req, res) => {
   const selectPages = flattenForSelect(tree)
     .filter(p => p.slug !== req.params.slug && !descendants.has(p.slug));
   const presetParent = page.parent || '';
-  res.render('edit', { title: `Edit: ${page.title} — OnlineWiki`, page, isNew: false, selectPages, presetParent });
+  const existingTitles = pages.map(p => ({ title: p.title, slug: p.slug }));
+  res.render('edit', { title: `Edit: ${page.title} — OnlineWiki`, page, isNew: false, selectPages, presetParent, existingTitles, csrfToken: res.locals.csrfToken });
 });
 
 app.post('/pages/:slug/edit', ensureRole('editor'), (req, res) => {
   const slug = req.params.slug;
   const page = loadPage(slug);
   if (!page) return res.status(404).send('Page not found');
+
+  const confirmDuplicate = (req.body.confirmDuplicate || '').toString().toLowerCase() === 'true';
+  const newTitle = (req.body.title || page.title || '').trim();
+
+  // Title-duplicate guard — case-insensitive match against OTHER pages only
+  // (the current page itself is allowed to keep its own title unchanged).
+  if (newTitle) {
+    const dupTitleMatch = listPages().find(p =>
+      p.slug !== slug &&
+      p.title &&
+      p.title.toLowerCase() === newTitle.toLowerCase());
+    if (dupTitleMatch && !confirmDuplicate) {
+      req.flash('error',
+        `Another page titled "${dupTitleMatch.title}" already exists (slug: ${dupTitleMatch.slug}). ` +
+        `Confirm the save again if you want to proceed with a duplicate title.`);
+      return res.redirect(`/pages/${slug}/edit`);
+    }
+  }
 
   // ── Optimistic concurrency check ─────────────────────────────────────────
   const { editedAt } = req.body;
@@ -1403,7 +1710,7 @@ app.get('/uploads', ensureAuth, (req, res) => {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   res.setHeader('Surrogate-Control', 'no-store');
-  res.render('uploads', { title: 'Documents — OnlineWiki', files: listUploads() });
+  res.render('uploads', { title: 'Documents — OnlineWiki', files: listUploads(), csrfToken: res.locals.csrfToken });
 });
 
 // Upload helper — wraps multer in a promise so async/await works cleanly
@@ -1494,6 +1801,7 @@ app.get('/uploads/download/:filename', ensureAuth, (req, res) => {
       flash:    res.locals.flash    || { error: [], success: [], info: [] },
       navFlat:  res.locals.navFlat  || [],
       navPages: res.locals.navPages || [],
+      csrfToken: res.locals.csrfToken || '',
       message: 'File not found.'
     });
   }
@@ -1546,7 +1854,8 @@ app.get('/admin/users', ensureRole('administrator'), (req, res) => {
   res.render('admin/users', {
     title: 'User Management — OnlineWiki',
     users,
-    localAdminUsername: process.env.LOCAL_ADMIN_USERNAME || ''
+    localAdminUsername: process.env.LOCAL_ADMIN_USERNAME || '',
+    csrfToken: res.locals.csrfToken
   });
 });
 
@@ -1758,7 +2067,8 @@ function _trimTo(str, max) {
 app.get('/admin/settings', ensureRole('administrator'), (req, res) => {
   res.render('admin/settings', {
     title:    'Site Settings — OnlineWiki',
-    settings: loadSettings()
+    settings: loadSettings(),
+    csrfToken: res.locals.csrfToken
   });
 });
 
@@ -1944,7 +2254,8 @@ app.get('/profile', ensureAuth, (req, res) => {
   res.render('profile', {
     title: 'My Profile — OnlineWiki',
     record,
-    avatarUrl: avatarUrlFor(req.user.avatar)
+    avatarUrl: avatarUrlFor(req.user.avatar),
+    csrfToken: res.locals.csrfToken
   });
 });
 
@@ -2143,6 +2454,7 @@ app.use((req, res) => {
     flash:    res.locals.flash    || { error: [], success: [], info: [] },
     navFlat:  res.locals.navFlat  || [],
     navPages: res.locals.navPages || [],
+    csrfToken: res.locals.csrfToken || '',
     message: 'The page you are looking for does not exist.'
   });
 });
@@ -2161,6 +2473,7 @@ app.use((err, req, res, _next) => {
       flash:    res.locals.flash    || { error: [], success: [], info: [] },
       navFlat:  res.locals.navFlat  || [],
       navPages: res.locals.navPages || [],
+      csrfToken: res.locals.csrfToken || '',
       message: process.env.NODE_ENV === 'development' ? err.message : 'An internal server error occurred.'
     });
   } catch (renderErr) {

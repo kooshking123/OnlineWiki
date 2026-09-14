@@ -81,7 +81,7 @@
                   <span class="child-row-actions" role="group" aria-label="Reorder <%= e(child.title) %>">
                     <% if (child._canMoveUp) { %>
                       <form method="POST" action="/pages/<%= child.slug %>/move">
-                        <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+                        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                         <input type="hidden" name="direction" value="up" />
                         <input type="hidden" name="redirect" value="/#sec_<%= section.slug %>" />
                         <button type="submit" class="btn btn-reorder" aria-label="Move <%= e(child.title) %> up" title="Move up">
@@ -95,7 +95,7 @@
                     <% } %>
                     <% if (child._canMoveDown) { %>
                       <form method="POST" action="/pages/<%= child.slug %>/move">
-                        <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+                        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                         <input type="hidden" name="direction" value="down" />
                         <input type="hidden" name="redirect" value="/#sec_<%= section.slug %>" />
                         <button type="submit" class="btn btn-reorder" aria-label="Move <%= e(child.title) %> down" title="Move down">
@@ -131,7 +131,7 @@
           <span class="card-reorder-cluster" role="group" aria-label="Reorder <%= e(section.title) %> section">
             <% if (section._canMoveUp) { %>
               <form method="POST" action="/pages/<%= section.slug %>/move">
-                <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+                <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                 <input type="hidden" name="direction" value="up" />
                 <input type="hidden" name="redirect" value="/#sec_<%= section.slug %>" />
                 <button type="submit" class="btn btn-sm btn-ghost btn-reorder" aria-label="Move section <%= e(section.title) %> up" title="Move section up">
@@ -145,7 +145,7 @@
             <% } %>
             <% if (section._canMoveDown) { %>
               <form method="POST" action="/pages/<%= section.slug %>/move">
-                <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+                <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                 <input type="hidden" name="direction" value="down" />
                 <input type="hidden" name="redirect" value="/#sec_<%= section.slug %>" />
                 <button type="submit" class="btn btn-sm btn-ghost btn-reorder" aria-label="Move section <%= e(section.title) %> down" title="Move section down">

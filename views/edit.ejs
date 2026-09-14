@@ -21,7 +21,8 @@
   id="pageForm"
   novalidate
 >
-  <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+  <input type="hidden" name="confirmDuplicate" id="confirmDuplicate" value="false" />
   <%# Concurrency sentinel — the server compares this to the on-disk updatedAt
       when saving. If they differ, a concurrent edit occurred on another server. %>
   <input type="hidden" name="editedAt"
@@ -210,9 +211,37 @@
       </div>
       <% } %>
 
+      <!-- Danger zone (existing pages only) -->
+      <% if (!isNew && page) { %>
+      <div class="editor-widget editor-widget-danger">
+        <h2 class="editor-widget-title">Danger Zone</h2>
+        <p class="editor-hint" style="margin-top:0.25rem;margin-bottom:0.75rem">
+          Deleting this page cannot be undone. Any child pages will be re-parented to the level above.
+        </p>
+        <button type="submit" form="pageDeleteForm" class="btn btn-danger btn-full btn-sm"
+                data-title="<%= e(page.title) %>"
+                onclick="return confirm('Delete ' + this.dataset.title + '? This cannot be undone.');">
+          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+          Delete Page…
+        </button>
+      </div>
+      <% } %>
+
     </div><!-- /.editor-sidebar-col -->
   </div><!-- /.editor-layout -->
 </form>
+
+<!-- Outer delete form (MUST live outside pageForm; nested <form> is illegal HTML
+     and causes browsers to flatten both <input name="_csrf"> into the outer
+     submission → comma-concatenated 256+1+256 = 513-byte _csrf value that
+     csrf-sync mismatches → 403 "invalid csrf token". -->
+<% if (!isNew && page) { %>
+<form action="/pages/<%= page.slug %>/delete" method="POST" id="pageDeleteForm"
+      style="display:none"
+      onsubmit="return confirm('Delete <%= e(page.title) %>? This cannot be undone.');">
+  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+</form>
+<% } %>
 
 <!-- ═══ Attachment picker modal ════════════════════════════════════════════ -->
 <div class="modal-overlay hidden" id="attachPickerModal" role="dialog" aria-modal="true" aria-labelledby="attachPickerTitle">
@@ -242,8 +271,10 @@
   window.WIKI = {
     isNew:   <%- isNew ? 'true' : 'false' %>,
     slug:    <%- JSON.stringify(isNew ? '' : (page ? page.slug : '')) %>,
+    originalTitle: <%- JSON.stringify(isNew ? '' : (page ? page.title || '' : '')) %>,
     content: <%- JSON.stringify(isNew ? '' : (page && page.content ? page.content : '')) %>,
-    csrf:    <%- JSON.stringify(typeof csrfToken !== 'undefined' ? csrfToken : '') %>
+    csrf:    <%- JSON.stringify(csrfToken || '') %>,
+    existingTitles: <%- JSON.stringify(existingTitles || []) %>
   };
 </script>
 <script src="/tinymce/tinymce.min.js"></script>

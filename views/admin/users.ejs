@@ -25,13 +25,13 @@
   const e = v => (v == null ? '' : String(v))
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-  const csrf = (typeof csrfToken !== 'undefined' ? csrfToken : '');
+  const csrf = csrfToken || '';
 %>
 
 <!-- Create Local User card -->
 <div class="card settings-card hidden" id="createLocalUserCard" style="margin-bottom: 2rem;">
   <form method="POST" action="/admin/users/new" novalidate>
-    <input type="hidden" name="_csrf" value="<%= csrf %>" />
+    <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
     <div class="settings-section">
       <h2 class="settings-section-title">Create Local Account</h2>
       <p class="form-hint" style="margin-bottom: 1.25rem; color: var(--muted);">
@@ -300,7 +300,7 @@
               <% } else { %>
                 <form method="POST" action="/admin/users/<%= e(u.username) %>/role"
                       class="role-form" id="roleForm_<%= e(u.username) %>">
-                  <input type="hidden" name="_csrf" value="<%= csrf %>" />
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                   <select name="role"
                           class="role-select role-select-<%= u.role %> role-select-compact"
                           aria-label="Role for <%= e(u.displayName || u.username) %>"
@@ -348,7 +348,7 @@
                  role="dialog" aria-modal="true" aria-labelledby="pwdModalTitle_<%= e(u.username) %>" tabindex="-1">
               <div class="modal">
                 <form method="POST" action="/admin/users/<%= e(u.username) %>/reset-password" novalidate>
-                  <input type="hidden" name="_csrf" value="<%= csrf %>" />
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                   <h3 class="modal-title" id="pwdModalTitle_<%= e(u.username) %>">
                     <% if (displaySource === 'ldap') { %>
                       Grant Local Password Access for <%= e(u.displayName || u.username) %>
@@ -398,7 +398,7 @@
                  role="dialog" aria-modal="true" aria-labelledby="delModalTitle_<%= e(u.username) %>" tabindex="-1">
               <div class="modal">
                 <form method="POST" action="/admin/users/<%= e(u.username) %>/delete">
-                  <input type="hidden" name="_csrf" value="<%= csrf %>" />
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                   <h3 class="modal-title" id="delModalTitle_<%= e(u.username) %>">
                     Delete user <%= e(u.displayName || u.username) %>?
                   </h3>

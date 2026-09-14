@@ -23,7 +23,7 @@
 <section class="upload-zone-section" aria-labelledby="uploadHeading">
   <h2 class="upload-zone-heading" id="uploadHeading">Upload a Document</h2>
   <form action="/uploads" method="POST" enctype="multipart/form-data" id="uploadForm">
-    <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+    <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
     <div class="drop-zone" id="dropZone" tabindex="0" role="button" aria-label="Click or drag files here to upload">
       <div class="drop-zone-inner">
         <div class="drop-zone-icon" aria-hidden="true">
@@ -153,7 +153,7 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" id="cancelDeleteFileBtn">Cancel</button>
       <form id="deleteFileForm" method="POST" style="margin:0">
-        <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
         <button type="submit" class="btn btn-danger">Delete File</button>
       </form>
     </div>

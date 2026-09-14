@@ -55,7 +55,7 @@
     <% if (canEdit) { %>
     <% if (canMoveUp) { %>
       <form method="POST" action="/pages/<%= page.slug %>/move" style="display:inline">
-        <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
         <input type="hidden" name="direction" value="up" />
         <button type="submit" class="btn btn-sm btn-ghost" title="Move up among siblings" aria-label="Move page up">
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="18 15 12 9 6 15"/></svg>
@@ -64,7 +64,7 @@
     <% } %>
     <% if (canMoveDown) { %>
       <form method="POST" action="/pages/<%= page.slug %>/move" style="display:inline">
-        <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
         <input type="hidden" name="direction" value="down" />
         <button type="submit" class="btn btn-sm btn-ghost" title="Move down among siblings" aria-label="Move page down">
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
@@ -79,6 +79,11 @@
       <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
       Edit
     </a>
+    <span class="page-actions-sep" aria-hidden="true"></span>
+    <button type="button" class="btn btn-sm btn-danger" onclick="openDeletePageModal()" aria-haspopup="dialog" aria-controls="deletePageModal">
+      <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+      Delete
+    </button>
     <% } /* end canEdit */ %>
   </div>
 </div>
@@ -132,7 +137,7 @@
         <div class="child-card-actions" role="group" aria-label="Reorder <%= e(child.title) %>">
           <% if (child._canMoveUp) { %>
             <form method="POST" action="/pages/<%= child.slug %>/move">
-              <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+              <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
               <input type="hidden" name="direction" value="up" />
               <input type="hidden" name="redirect" value="/pages/<%= page.slug %>#childrenHeading" />
               <button type="submit" class="btn btn-reorder" aria-label="Move <%= e(child.title) %> up" title="Move up">
@@ -146,7 +151,7 @@
           <% } %>
           <% if (child._canMoveDown) { %>
             <form method="POST" action="/pages/<%= child.slug %>/move">
-              <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+              <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
               <input type="hidden" name="direction" value="down" />
               <input type="hidden" name="redirect" value="/pages/<%= page.slug %>#childrenHeading" />
               <button type="submit" class="btn btn-reorder" aria-label="Move <%= e(child.title) %> down" title="Move down">
@@ -220,7 +225,7 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" id="cancelDeletePageBtn">Cancel</button>
       <form action="/pages/<%= page.slug %>/delete" method="POST" style="margin:0">
-        <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
         <button type="submit" class="btn btn-danger">Delete Page</button>
       </form>
     </div>
