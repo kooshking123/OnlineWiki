@@ -33,6 +33,10 @@
         <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
         Home
       </a>
+      <%
+        const _sideRole = (user && typeof user.role === 'string') ? user.role : '';
+        const _sideEditorOrBetter = _sideRole === 'editor' || _sideRole === 'administrator';
+      %>
       <a href="/uploads" class="sidebar-link sidebar-link-icon">
         <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
         Documents
@@ -53,10 +57,12 @@
         My Profile
       </a>
       <% } %>
+      <% if (_sideEditorOrBetter) { %>
       <a href="/pages/new" class="sidebar-link sidebar-link-icon sidebar-link-new">
         <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         New Page
       </a>
+      <% } %>
 
       <div class="sidebar-section-label">Pages</div>
 

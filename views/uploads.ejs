@@ -13,7 +13,13 @@
   </div>
 </div>
 
-<!-- ─── Upload drop zone ─────────────────────────────────────────────────── -->
+<%
+  const _userRole = (user && typeof user.role === 'string') ? user.role : '';
+  const _isEditorOrBetter = _userRole === 'editor' || _userRole === 'administrator';
+%>
+
+<% if (_isEditorOrBetter) { %>
+<!-- ─── Upload drop zone (editor + administrator only) ──────────────────── -->
 <section class="upload-zone-section" aria-labelledby="uploadHeading">
   <h2 class="upload-zone-heading" id="uploadHeading">Upload a Document</h2>
   <form action="/uploads" method="POST" enctype="multipart/form-data" id="uploadForm">
@@ -51,6 +57,7 @@
     </div>
   </form>
 </section>
+<% } %>
 
 <!-- ─── File list ─────────────────────────────────────────────────────────── -->
 <section class="files-section" aria-labelledby="filesHeading">
@@ -68,7 +75,7 @@
     <div class="empty-state">
       <div class="empty-state-icon" aria-hidden="true">📁</div>
       <h3 class="empty-state-title">No files yet</h3>
-      <p class="empty-state-text">Use the upload area above to add documents.</p>
+      <p class="empty-state-text"><%= _isEditorOrBetter ? 'Use the upload area above to add documents.' : 'No documents have been uploaded yet.' %></p>
     </div>
   <% } else { %>
     <div class="files-table-wrap">
@@ -107,6 +114,7 @@
                   <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   Download
                 </a>
+                <% if (_isEditorOrBetter) { %>
                 <button
                   class="btn btn-sm btn-danger delete-file-btn"
                   data-filename="<%= f.name %>"
@@ -116,6 +124,7 @@
                   <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                   Delete
                 </button>
+                <% } %>
               </td>
             </tr>
           <% }); %>
@@ -129,7 +138,8 @@
   <% } %>
 </section>
 
-<!-- ═══ Delete file modal ═══════════════════════════════════════════════════ -->
+<% if (_isEditorOrBetter) { %>
+<!-- ═══ Delete file modal (editor + administrator only) ════════════════════ -->
 <div class="modal-overlay hidden" id="deleteFileModal" role="dialog" aria-modal="true" aria-labelledby="deleteFileModalTitle">
   <div class="modal">
     <div class="modal-danger-icon" aria-hidden="true">
@@ -149,9 +159,10 @@
     </div>
   </div>
 </div>
+<% } %>
 
 <script>
-  // ── File search ────────────────────────────────────────────────────────────
+  // ── File search (all users) ────────────────────────────────────────────────
   const fileSearch = document.getElementById('fileSearch');
   if (fileSearch) {
     fileSearch.addEventListener('input', function () {
@@ -166,106 +177,108 @@
     });
   }
 
-  // ── Drop zone ──────────────────────────────────────────────────────────────
+  // ── Drop zone + upload form (editor + administrator only) ──────────────────
   const dropZone      = document.getElementById('dropZone');
-  const fileInput     = document.getElementById('fileInput');
-  const dropText      = document.getElementById('dropZoneText');
-  const selectedBanner = document.getElementById('fileSelectedBanner');
-  const selectedName  = document.getElementById('selectedFileName');
-  const clearBtn      = document.getElementById('clearFileBtn');
-  const uploadActions = document.getElementById('uploadActions');
+  if (dropZone) {
+    const fileInput     = document.getElementById('fileInput');
+    const dropText      = document.getElementById('dropZoneText');
+    const selectedBanner = document.getElementById('fileSelectedBanner');
+    const selectedName  = document.getElementById('selectedFileName');
+    const clearBtn      = document.getElementById('clearFileBtn');
+    const uploadActions = document.getElementById('uploadActions');
 
-  function setFile(file) {
-    if (!file) return;
-    selectedName.textContent = file.name;
-    selectedBanner.classList.remove('hidden');
-    uploadActions.classList.remove('hidden');
-    dropZone.classList.add('drop-zone-has-file');
-  }
-
-  function clearFile() {
-    fileInput.value = '';
-    selectedBanner.classList.add('hidden');
-    uploadActions.classList.add('hidden');
-    dropZone.classList.remove('drop-zone-has-file');
-    dropText.textContent = 'Drag & drop files here';
-  }
-
-  fileInput.addEventListener('change', () => {
-    if (fileInput.files[0]) setFile(fileInput.files[0]);
-  });
-  clearBtn.addEventListener('click', clearFile);
-
-  ['dragover','dragenter'].forEach(ev => dropZone.addEventListener(ev, e => {
-    e.preventDefault(); dropZone.classList.add('drop-zone-drag');
-  }));
-  ['dragleave','drop'].forEach(ev => dropZone.addEventListener(ev, e => {
-    e.preventDefault(); dropZone.classList.remove('drop-zone-drag');
-  }));
-  dropZone.addEventListener('drop', e => {
-    const f = e.dataTransfer.files[0];
-    if (f) {
-      const dt = new DataTransfer();
-      dt.items.add(f);
-      fileInput.files = dt.files;
-      setFile(f);
+    function setFile(file) {
+      if (!file) return;
+      selectedName.textContent = file.name;
+      selectedBanner.classList.remove('hidden');
+      uploadActions.classList.remove('hidden');
+      dropZone.classList.add('drop-zone-has-file');
     }
-  });
-  dropZone.addEventListener('keydown', e => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
-  });
 
-  // ── Upload form submit guard ──────────────────────────────────────────────
-  const uploadForm = document.getElementById('uploadForm');
-  const uploadBtn = document.getElementById('uploadBtn');
-  if (uploadForm && uploadBtn) {
-    // Browser-native submit via Enter key / submit click is fine, but guard
-    // against double-submit and make sure the user selected a file first so
-    // there's no round-trip flash for "Please select a file".
-    uploadForm.addEventListener('submit', function (e) {
-      if (this.dataset.submitting === '1') { e.preventDefault(); return; }
-      const f = fileInput.files?.[0];
-      if (!f) {
-        e.preventDefault();
-        dropText.textContent = 'Select a file first, then click Upload.';
-        dropZone.classList.add('drop-zone-error');
-        setTimeout(() => { dropZone.classList.remove('drop-zone-error'); }, 1200);
-        return;
+    function clearFile() {
+      fileInput.value = '';
+      selectedBanner.classList.add('hidden');
+      uploadActions.classList.add('hidden');
+      dropZone.classList.remove('drop-zone-has-file');
+      dropText.textContent = 'Drag & drop files here';
+    }
+
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files[0]) setFile(fileInput.files[0]);
+    });
+    clearBtn.addEventListener('click', clearFile);
+
+    ['dragover','dragenter'].forEach(ev => dropZone.addEventListener(ev, e => {
+      e.preventDefault(); dropZone.classList.add('drop-zone-drag');
+    }));
+    ['dragleave','drop'].forEach(ev => dropZone.addEventListener(ev, e => {
+      e.preventDefault(); dropZone.classList.remove('drop-zone-drag');
+    }));
+    dropZone.addEventListener('drop', e => {
+      const f = e.dataTransfer.files[0];
+      if (f) {
+        const dt = new DataTransfer();
+        dt.items.add(f);
+        fileInput.files = dt.files;
+        setFile(f);
       }
-      if (f.size > 50 * 1024 * 1024) {
-        e.preventDefault();
-        alert('File too large. Maximum size is 50 MB.');
-        return;
-      }
-      this.dataset.submitting = '1';
-      uploadBtn.disabled = true;
-      uploadBtn.classList.add('is-loading');
-      uploadBtn.firstChild && uploadBtn.firstChild.nodeType === 1 && (uploadBtn.firstChild.style.opacity = '0.5');
+    });
+    dropZone.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+    });
+
+    // ── Upload form submit guard ────────────────────────────────────────────
+    const uploadForm = document.getElementById('uploadForm');
+    const uploadBtn = document.getElementById('uploadBtn');
+    if (uploadForm && uploadBtn) {
+      uploadForm.addEventListener('submit', function (e) {
+        if (this.dataset.submitting === '1') { e.preventDefault(); return; }
+        const f = fileInput.files?.[0];
+        if (!f) {
+          e.preventDefault();
+          dropText.textContent = 'Select a file first, then click Upload.';
+          dropZone.classList.add('drop-zone-error');
+          setTimeout(() => { dropZone.classList.remove('drop-zone-error'); }, 1200);
+          return;
+        }
+        if (f.size > 50 * 1024 * 1024) {
+          e.preventDefault();
+          alert('File too large. Maximum size is 50 MB.');
+          return;
+        }
+        this.dataset.submitting = '1';
+        uploadBtn.disabled = true;
+        uploadBtn.classList.add('is-loading');
+        if (uploadBtn.firstChild && uploadBtn.firstChild.nodeType === 1) uploadBtn.firstChild.style.opacity = '0.5';
+      });
+    }
+  }
+
+  // ── Delete file modal wiring (editor + administrator only) ─────────────────
+  const deleteFileModal   = document.getElementById('deleteFileModal');
+  if (deleteFileModal) {
+    const cancelDeleteFileBtn = document.getElementById('cancelDeleteFileBtn');
+
+    function openDeleteModal(filename, displayName) {
+      document.getElementById('deleteFileDisplayName').textContent = displayName;
+      document.getElementById('deleteFileForm').action = `/uploads/delete/${encodeURIComponent(filename)}`;
+      deleteFileModal.classList.remove('hidden');
+      cancelDeleteFileBtn.focus();
+    }
+
+    document.addEventListener('click', e => {
+      const btn = e.target.closest('.delete-file-btn');
+      if (!btn) return;
+      e.preventDefault();
+      openDeleteModal(btn.dataset.filename || '', btn.dataset.displayname || '');
+    });
+
+    cancelDeleteFileBtn.addEventListener('click', () => deleteFileModal.classList.add('hidden'));
+    deleteFileModal.addEventListener('click', e => {
+      if (e.target === deleteFileModal) deleteFileModal.classList.add('hidden');
+    });
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') deleteFileModal.classList.add('hidden');
     });
   }
-  const deleteFileModal   = document.getElementById('deleteFileModal');
-  const cancelDeleteFileBtn = document.getElementById('cancelDeleteFileBtn');
-
-  function openDeleteModal(filename, displayName) {
-    document.getElementById('deleteFileDisplayName').textContent = displayName;
-    document.getElementById('deleteFileForm').action = `/uploads/delete/${encodeURIComponent(filename)}`;
-    deleteFileModal.classList.remove('hidden');
-    cancelDeleteFileBtn.focus();
-  }
-
-  // Event delegation: any .delete-file-btn click reads data attributes safely
-  document.addEventListener('click', e => {
-    const btn = e.target.closest('.delete-file-btn');
-    if (!btn) return;
-    e.preventDefault();
-    openDeleteModal(btn.dataset.filename || '', btn.dataset.displayname || '');
-  });
-
-  cancelDeleteFileBtn.addEventListener('click', () => deleteFileModal.classList.add('hidden'));
-  deleteFileModal.addEventListener('click', e => {
-    if (e.target === deleteFileModal) deleteFileModal.classList.add('hidden');
-  });
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') deleteFileModal.classList.add('hidden');
-  });
 </script>

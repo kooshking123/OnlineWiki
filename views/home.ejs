@@ -35,8 +35,10 @@
   <div class="empty-state">
     <div class="empty-state-icon" aria-hidden="true">📝</div>
     <h2 class="empty-state-title">No pages yet</h2>
-    <p class="empty-state-text">Start building your knowledge base by creating the first page.</p>
+    <p class="empty-state-text"><%= canEdit ? 'Start building your knowledge base by creating the first page.' : 'No pages have been created yet. Ask an editor to populate the wiki.' %></p>
+    <% if (canEdit) { %>
     <a href="/pages/new" class="btn btn-primary">Create First Page</a>
+    <% } %>
   </div>
 <% } else { %>
 

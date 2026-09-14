@@ -191,17 +191,24 @@
   </div>
 
   <!-- Users table -->
-  <div class="admin-table-wrap">
-    <table class="admin-table" id="usersTable" aria-label="Registered users">
+  <div class="admin-table-wrap admin-table-wrap-fit">
+    <table class="admin-table admin-table-users" id="usersTable" aria-label="Registered users">
+      <colgroup>
+        <col class="col-user" />
+        <col class="col-email" />
+        <col class="col-auth" />
+        <col class="col-activity" />
+        <col class="col-role" />
+        <col class="col-actions" />
+      </colgroup>
       <thead>
         <tr>
           <th scope="col">User</th>
-          <th scope="col">Username</th>
-          <th scope="col">Source</th>
-          <th scope="col">Last Login</th>
-          <th scope="col">Registered</th>
+          <th scope="col">Email</th>
+          <th scope="col">Auth</th>
+          <th scope="col">Last · Registered</th>
           <th scope="col">Role</th>
-          <th scope="col" style="width: 16rem;">Actions</th>
+          <th scope="col" class="col-actions" aria-label="Actions">✦</th>
         </tr>
       </thead>
       <tbody>
@@ -217,101 +224,120 @@
               if (hasPwd) return u.source || 'local';
               return u.source || 'ldap';
             })();
+            const fmtShort = d => new Date(d).toLocaleDateString(undefined, {year:'2-digit', month:'2-digit', day:'2-digit'});
+            const fmtFull  = d => new Date(d).toLocaleString(undefined, {dateStyle:'medium', timeStyle:'short'});
+            const protectTitle = isProtected
+              ? (isSelf ? 'Cannot change own role / no actions on own account' : 'Env admin role is fixed (managed via .env file)')
+              : '';
+            const identityTitle = (u.displayName || u.username) + ' · @' + u.username + (u.email ? ' · ' + u.email : '');
           %>
           <tr class="user-row"
               data-search-val="<%= e((u.displayName + ' ' + u.username + ' ' + (u.email||'') + ' ' + displaySource).toLowerCase()) %>">
-            <!-- Avatar + name -->
-            <td class="user-name-cell">
-              <div class="avatar avatar-md" aria-hidden="true">
-                <% if (u.avatarUrl) { %>
-                  <img src="<%= u.avatarUrl %>" alt="" referrerpolicy="no-referrer" />
-                <% } else { %>
-                  <span class="avatar-letter"><%= ((u.displayName || u.username || '?')[0] || '?').toUpperCase() %></span>
-                <% } %>
-              </div>
-              <div class="user-admin-info">
-                <span class="user-admin-name"><%= e(u.displayName || u.username) %></span>
-                <span class="user-admin-email"><%= e(u.email || '—') %></span>
+            <!-- User (avatar + display name) — username/email in hover tooltip -->
+            <td class="user-identity-cell" title="<%= e(identityTitle) %>">
+              <div class="user-identity user-identity-compact">
+                <div class="avatar avatar-sm" aria-hidden="true">
+                  <% if (u.avatarUrl) { %>
+                    <img src="<%= u.avatarUrl %>" alt="" referrerpolicy="no-referrer" />
+                  <% } else { %>
+                    <span class="avatar-letter"><%= ((u.displayName || u.username || '?')[0] || '?').toUpperCase() %></span>
+                  <% } %>
+                </div>
+                <span class="user-identity-name">
+                  <%= e(u.displayName || u.username) %>
+                  <% if (isSelf) { %>
+                    <span class="self-badge" title="This is your account">you</span>
+                  <% } else if (isEnvAdmin) { %>
+                    <span class="self-badge" title="Environment-configured local administrator">env</span>
+                  <% } %>
+                </span>
               </div>
             </td>
-            <!-- Username -->
-            <td class="user-username-cell">
-              <code class="inline-code"><%= e(u.username) %></code>
-              <% if (isSelf) { %>
-                <span class="self-badge" title="This is your account">you</span>
-              <% } else if (isEnvAdmin) { %>
-                <span class="self-badge" title="Environment-configured local administrator">env-admin</span>
+            <!-- Email -->
+            <td class="user-email-cell" title="<%= e(u.email || '') %>">
+              <% if (u.email) { %>
+                <a class="user-admin-email" href="mailto:<%= e(u.email) %>"><%= e(u.email) %></a>
+              <% } else { %>
+                <span class="muted-hint">—</span>
               <% } %>
             </td>
-            <!-- Source -->
-            <td class="user-source-cell">
-              <span class="source-badge source-badge-<%= displaySource %>">
-                <% if (displaySource === 'local') { %>🔐 Local
-                <% } else if (displaySource === 'hybrid') { %>🔐🌐 Hybrid
-                <% } else { %>🌐 LDAP<% } %>
+            <!-- Auth Source (icon-only; full label in title) -->
+            <td class="user-source-cell user-source-cell-icon"
+                title="<%= displaySource === 'local' ? 'Local password account' :
+                         displaySource === 'hybrid' ? 'Hybrid: LDAP + local password' :
+                         'LDAP / Active Directory auto-registered' %>">
+              <span class="source-badge source-badge-<%= displaySource %> source-badge-icon">
+                <% if (displaySource === 'local') { %>🔐
+                <% } else if (displaySource === 'hybrid') { %>✦
+                <% } else { %>🌐<% } %>
               </span>
             </td>
-            <!-- Last login -->
-            <td class="user-date-cell">
-              <% if (u.lastLoginAt) { %>
-                <time datetime="<%= e(u.lastLoginAt) %>">
-                  <%= new Date(u.lastLoginAt).toLocaleDateString(undefined, {dateStyle:'medium'}) %>
-                </time>
-              <% } else { %>&mdash;<% } %>
+            <!-- Last Signed-in · Registered (merged slash-separated compact) -->
+            <td class="user-activity-cell"
+                title="Last sign-in: <%= u.lastLoginAt ? fmtFull(u.lastLoginAt) : 'Never' %>&#10;Registered:  <%= u.registeredAt ? fmtFull(u.registeredAt) : 'Unknown' %>">
+              <span class="user-activity-seg">
+                <% if (u.lastLoginAt) { %>
+                  <time datetime="<%= e(u.lastLoginAt) %>"><%= fmtShort(u.lastLoginAt) %></time>
+                <% } else { %>
+                  <span class="muted-hint">—</span>
+                <% } %>
+              </span>
+              <span class="user-activity-sep" aria-hidden="true">·</span>
+              <span class="user-activity-seg">
+                <% if (u.registeredAt) { %>
+                  <time datetime="<%= e(u.registeredAt) %>"><%= fmtShort(u.registeredAt) %></time>
+                <% } else { %>
+                  <span class="muted-hint">?</span>
+                <% } %>
+              </span>
             </td>
-            <!-- Registered -->
-            <td class="user-date-cell">
-              <% if (u.registeredAt) { %>
-                <time datetime="<%= e(u.registeredAt) %>">
-                  <%= new Date(u.registeredAt).toLocaleDateString(undefined, {dateStyle:'medium'}) %>
-                </time>
-              <% } else { %>&mdash;<% } %>
-            </td>
-            <!-- Role -->
-            <td class="user-role-cell">
+            <!-- Role / Access Level -->
+            <td class="user-role-cell"<%= protectTitle ? ` title="${e(protectTitle)}"` : '' %>>
               <% if (isProtected) { %>
-                <span class="role-badge role-badge-<%= u.role %>"><%= u.role %></span>
-                <span class="self-protect-note">
-                  <%= isSelf ? 'Cannot change own role' : 'Env admin role is fixed' %>
+                <span class="role-badge role-badge-<%= u.role %> role-badge-locked role-badge-short">
+                  <%= u.role === 'administrator' ? 'Admin' : (u.role === 'editor' ? 'Ed' : 'Rd') %>
                 </span>
               <% } else { %>
                 <form method="POST" action="/admin/users/<%= e(u.username) %>/role"
                       class="role-form" id="roleForm_<%= e(u.username) %>">
                   <input type="hidden" name="_csrf" value="<%= csrf %>" />
                   <select name="role"
-                          class="role-select role-select-<%= u.role %>"
+                          class="role-select role-select-<%= u.role %> role-select-compact"
                           aria-label="Role for <%= e(u.displayName || u.username) %>"
+                          title="Access level · click to change"
                           onchange="this.form.submit()">
-                    <option value="reader"        <%= u.role === 'reader'        ? 'selected' : '' %>>Reader</option>
-                    <option value="editor"        <%= u.role === 'editor'        ? 'selected' : '' %>>Editor</option>
-                    <option value="administrator" <%= u.role === 'administrator' ? 'selected' : '' %>>Administrator</option>
+                    <option value="reader"        <%= u.role === 'reader'        ? 'selected' : '' %>>Rd</option>
+                    <option value="editor"        <%= u.role === 'editor'        ? 'selected' : '' %>>Ed</option>
+                    <option value="administrator" <%= u.role === 'administrator' ? 'selected' : '' %>>Adm</option>
                   </select>
                   <noscript><button type="submit" class="btn btn-sm btn-ghost">Save</button></noscript>
                 </form>
               <% } %>
             </td>
-            <!-- Actions -->
-            <td class="user-actions-cell">
+            <!-- Actions (icon-only; tooltips carry text) -->
+            <td class="user-actions-cell col-actions"<%= protectTitle ? ` title="${e(protectTitle)}"` : '' %>>
               <% if (!isProtected) { %>
-                <!-- Reset password -->
-                <button type="button" class="btn btn-sm btn-ghost js-open-pwd"
-                        aria-controls="pwdModal_<%= e(u.username) %>" aria-haspopup="dialog"
-                        data-username="<%= e(u.username) %>" data-display="<%= e(u.displayName || u.username) %>">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                  Reset Password
-                </button>
+                <div class="user-actions-inner user-actions-compact">
+                  <!-- Reset password -->
+                  <button type="button" class="btn btn-sm btn-ghost btn-icon js-open-pwd"
+                          aria-controls="pwdModal_<%= e(u.username) %>" aria-haspopup="dialog"
+                          aria-label="Reset password for <%= e(u.displayName || u.username) %>"
+                          title="Reset password · <%= e(u.displayName || u.username) %>"
+                          data-username="<%= e(u.username) %>" data-display="<%= e(u.displayName || u.username) %>">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                  </button>
 
-                <!-- Delete -->
-                <button type="button" class="btn btn-sm btn-danger js-open-del"
-                        aria-controls="delModal_<%= e(u.username) %>" aria-haspopup="dialog"
-                        data-username="<%= e(u.username) %>" data-display="<%= e(u.displayName || u.username) %>">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
-                  Delete
-                </button>
+                  <!-- Delete -->
+                  <button type="button" class="btn btn-sm btn-danger btn-icon js-open-del"
+                          aria-controls="delModal_<%= e(u.username) %>" aria-haspopup="dialog"
+                          aria-label="Delete user <%= e(u.displayName || u.username) %>"
+                          title="Delete user · <%= e(u.displayName || u.username) %>"
+                          data-username="<%= e(u.username) %>" data-display="<%= e(u.displayName || u.username) %>">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/></svg>
+                  </button>
+                </div>
               <% } else { %>
-                <span class="self-protect-note">
-                  <%= isSelf ? 'No actions on own account' : 'Managed via .env file' %>
-                </span>
+                <span class="self-protect-note-inline" aria-hidden="true" title="<%= e(protectTitle) %>">🔒</span>
               <% } %>
             </td>
           </tr>

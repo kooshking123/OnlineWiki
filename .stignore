@@ -5,34 +5,77 @@
 //
 // ┌── WHICH SYNCTHING SHARE DID YOU CONFIGURE? ─────────────────────────────────┐
 // │
-// │  TWO valid options. Pick EXACTLY ONE and copy the matching template below  │
-// │  into the ROOT of the folder you added to SyncThing (File → Add Folder).   │
-// │
-// │  (A)  SHARE = entire OnlineWiki repo folder                                │
-// │       e.g. C:\Apps\OnlineWiki  OR  /srv/OnlineWiki                         │
-// │       Default DATA_DIR=data lives INSIDE this folder.                      │
-// │       → Use TEMPLATE A further down in this file (ALREADY ACTIVE below).   │
-// │
+// │  ★ DEFAULT / RECOMMENDED for Docker & production:                          │
+// │  ───────────────────────────────────────────────────────────────           │
 // │  (B)  SHARE = ONLY the single DATA_DIR folder                              │
-// │       e.g. X:\OnlineWiki-Data  OR  \\filer.corp\wiki$  OR  /srv/st-wiki    │
-// │       (You set DATA_DIR in .env to an absolute/UNC path).                  │
-// │       → Do NOT use this file. Use TEMPLATE B at the BOTTOM of this file.   │
-// │         Copy TEMPLATE B into a NEW .stignore file at the ROOT of your      │
-// │         custom DATA_DIR share, and delete this one from the repo.          │
+// │       (Docker: DATA_DIR is mounted as an external persistent volume.)      │
+// │       e.g. /var/lib/onlinewiki   OR   X:\OnlineWiki-Data                   │
+// │            \\filer.corp\wiki$   OR   /srv/st-wiki                          │
+// │       → Copy TEMPLATE B (below) into a NEW .stignore file at the ROOT      │
+// │         of your DATA_DIR share. Then delete this repo-root copy.           │
+// │
+// │  Legacy / in-place alternative (code lives beside data):                   │
+// │  ───────────────────────────────────────────────────────────────           │
+// │  (A)  SHARE = entire OnlineWiki repo folder                                │
+// │       e.g. C:\Apps\OnlineWiki  OR  /srv/OnlineWiki  (DATA_DIR=data inside) │
+// │       → Use TEMPLATE A (further down). It is the active template in       │
+// │         this file if you share the whole repo folder.                      │
 // │
 // │  In both cases, the contents actually synced are the SIX persistent        │
 // │  entries: pages/, uploads/, avatars/, sessions/*.json, users.json,        │
-// │  settings.json. Logs, node_modules, .env, and tmp/lock scratch files are  │
-// │  ALWAYS excluded.                                                          │
+// │  settings.json. Logs, node_modules, .env, test_files/, and tmp/lock       │
+// │  scratch files are ALWAYS excluded.                                        │
 // └────────────────────────────────────────────────────────────────────────────┘
 
 // ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║  TEMPLATE B — SyncThing share = DATA_DIR ONLY  (★ RECOMMENDED)            ║
+// ║  • Docker: mount DATA_DIR as an external persistent volume                ║
+// ║    (e.g. /var/lib/onlinewiki  →  docker volume or host bind mount)        ║
+// ║  • Bare-metal: X:\OnlineWiki-Data  |  \\filer.corp\wiki$  |  /srv/st-wiki ║
+// ╠══════════════════════════════════════════════════════════════════════════════╣
+// ║  HOW TO USE THIS TEMPLATE:                                                 ║
+// ║  1. On every server, open SyncThing → Add Folder.                          ║
+// ║  2. Set the Folder Path to the EXACT value of DATA_DIR in your .env.       ║
+// ║     (Docker: this is the HOST-side path of your persistent volume.)        ║
+// ║  3. Copy EVERY LINE between the START/END markers below into a NEW file    ║
+// ║     at  <DATA_DIR>/.stignore   (NOT the repo root .stignore!).             ║
+// ║  4. Connect all nodes to each other via SyncThing Device IDs.              ║
+// ╠══════════════════════════════════════════════════════════════════════════════╣
+// ║  ── START of TEMPLATE B — copy below this line ────────────────────        ║
+// ║  // .stignore for OnlineWiki DATA_DIR (absolute / Docker volume)           ║
+// ║                                                                            ║
+// ║  // ── Never sync: session-file-store scratch files ──                     ║
+// ║  sessions/*.tmp                                                            ║
+// ║  sessions/*.tmp.*                                                          ║
+// ║  sessions/*.lock                                                           ║
+// ║                                                                            ║
+// ║  // ── Never sync: logs if someone accidentally puts LOG_DIR inside here ──║
+// ║  logs/                                                                     ║
+// ║  *.log                                                                     ║
+// ║                                                                            ║
+// ║  // ── Never sync: SyncThing metadata / OS clutter ──                      ║
+// ║  .stfolder/                                                                ║
+// ║  .stversions/                                                              ║
+// ║  .DS_Store                                                                 ║
+// ║  Thumbs.db                                                                 ║
+// ║                                                                            ║
+// ║  // ── IS synced (everything not ignored):                                 ║
+// ║  //  pages/, uploads/, avatars/, sessions/*.json, users.json, settings.json║
+// ║  ── END of TEMPLATE B ────────────────────────────────────────────         ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// ╔══════════════════════════════════════════════════════════════════════════════╗
 // ║  TEMPLATE A — SyncThing share = the entire OnlineWiki project/repo folder  ║
-// ║  (Default deployment: OnlineWiki runs in-place, DATA_DIR=data is relative) ║
+// ║  (Legacy: OnlineWiki runs in-place, DATA_DIR=data lives inside the repo)   ║
 // ╚══════════════════════════════════════════════════════════════════════════════╝
 //
 // ── Never sync: per-server runtime / build artifacts ──────────────────────────
 node_modules/
+
+// ── Never sync: local test files / scratch data ───────────────────────────────
+// test_files/ holds local test fixtures, datasets, and scratch work that should
+// never be committed to git or replicated to other servers.
+test_files/
 
 // ── Never sync: server-specific runtime config ────────────────────────────────
 // .env holds PORT, per-node LOG_DIR, LDAP bind creds, etc. — it MUST differ
@@ -88,38 +131,3 @@ desktop.ini
 //      server.js, views/, public/, lib/, package.json, package-lock.json
 //      → Sync these if you want SyncThing to deploy code; or deploy them
 //        via git / robocopy / CI and keep this share data-only.
-
-// ╔══════════════════════════════════════════════════════════════════════════════╗
-// ║  TEMPLATE B — SyncThing share = DATA_DIR ONLY                              ║
-// ║  (e.g. X:\OnlineWiki-Data  OR  \\filer.corp\wiki$  OR  /srv/st-wiki)       ║
-// ╠══════════════════════════════════════════════════════════════════════════════╣
-// ║  HOW TO USE THIS TEMPLATE:                                                 ║
-// ║  1. On every server, open SyncThing → Add Folder.                          ║
-// ║  2. Set the Folder Path to the EXACT value of DATA_DIR in your .env.       ║
-// ║  3. Copy EVERY LINE between the START/END markers below into a NEW file    ║
-// ║     at  <DATA_DIR>/.stignore   (NOT the repo root .stignore!).             ║
-// ║  4. Delete the data/ prefix from patterns (already done below).            ║
-// ║  5. Connect all nodes to each other via SyncThing Device IDs.              ║
-// ╠══════════════════════════════════════════════════════════════════════════════╣
-// ║  ── START of TEMPLATE B — copy below this line ────────────────────        ║
-// ║  // .stignore for OnlineWiki DATA_DIR (custom absolute path)               ║
-// ║                                                                            ║
-// ║  // ── Never sync: session-file-store scratch files ──                     ║
-// ║  sessions/*.tmp                                                            ║
-// ║  sessions/*.tmp.*                                                          ║
-// ║  sessions/*.lock                                                           ║
-// ║                                                                            ║
-// ║  // ── Never sync: logs if someone accidentally puts LOG_DIR inside here ──║
-// ║  logs/                                                                     ║
-// ║  *.log                                                                     ║
-// ║                                                                            ║
-// ║  // ── Never sync: SyncThing metadata / OS clutter ──                      ║
-// ║  .stfolder/                                                                ║
-// ║  .stversions/                                                              ║
-// ║  .DS_Store                                                                 ║
-// ║  Thumbs.db                                                                 ║
-// ║                                                                            ║
-// ║  // ── IS synced (everything not ignored):                                 ║
-// ║  //  pages/, uploads/, avatars/, sessions/*.json, users.json, settings.json║
-// ║  ── END of TEMPLATE B ────────────────────────────────────────────         ║
-// ╚══════════════════════════════════════════════════════════════════════════════╝

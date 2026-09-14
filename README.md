@@ -13,7 +13,139 @@ A lightweight, self-hosted internal collaborative wiki.
 
 ---
 
-## Setup
+## Deployment Overview
+
+| Path | Use case | DATA_DIR location | SyncThing share |
+|---|---|---|---|
+| **★ Docker (recommended for production)** | Multi-server HA, LB, easy upgrades | External persistent volume (`/var/lib/onlinewiki` mounted from host or named volume) | **Only DATA_DIR** (TEMPLATE B in `.stignore`) — code ships inside the image, only state is replicated |
+| Bare-metal / local dev | Single server, local testing, quick iteration | Relative `data/` inside repo OR absolute path | DATA_DIR only (TEMPLATE B) OR whole repo (TEMPLATE A, legacy) |
+
+All persistent state (pages, uploads, avatars, sessions, users, settings) lives in **one folder, DATA_DIR**. In Docker deployments, this folder is mounted from **outside the container** so that rebuilding the image never destroys your data, and SyncThing running on the host (or as a sibling container) replicates it between nodes.
+
+---
+
+## ★ Docker Deployment (Recommended for Production)
+
+### 1. Prepare the environment file
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Open `.env` and fill in the required values. The defaults in `.env.example` are already tuned for Docker:
+
+```env
+# ── Docker-mounted persistent storage (already the default in .env.example)
+DATA_DIR=/var/lib/onlinewiki   # container-side path — mount a host dir / named volume here
+LOG_DIR=/var/log/onlinewiki    # container-side path — optional second volume
+
+# ── Session sharing across containers (identical on every node)
+SESSION_SECRET=<generate: node -e "console.log(require('crypto').randomBytes(48).toString('hex'))">
+SESSION_MODE=syncthing         # data is replicated by SyncThing via the shared DATA_DIR volume
+MAINTENANCE_TOKEN=<generate:   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))">
+
+# ── LDAP / Active Directory
+LDAP_URL=ldap://your-domain-controller.example.com
+LDAP_BIND_DN=cn=svc-wiki,ou=ServiceAccounts,dc=example,dc=com
+LDAP_BIND_PASSWORD=your-service-account-password
+LDAP_BASE_DN=dc=example,dc=com
+```
+
+> **Tip:** Set `LDAP_TLS_REJECT_UNAUTHORIZED=false` in `.env` if your domain controller uses a self-signed certificate.
+
+### 2. Example Dockerfile
+
+```dockerfile
+# Dockerfile for OnlineWiki
+FROM node:20-bookworm-slim
+
+WORKDIR /app
+
+# Install deps first for better layer caching
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+# Copy the rest of the application code
+COPY . .
+
+# Default port (override with -e PORT= if needed)
+EXPOSE 3000
+
+# ⚠ IMPORTANT: Do NOT declare a VOLUME here — volumes are declared in docker-compose.yml
+# or with `docker run -v` so you control the host-side path (needed for SyncThing to
+# replicate the same DATA_DIR across nodes consistently).
+
+CMD ["npm", "start"]
+```
+
+### 3. Example docker-compose.yml (single node)
+
+```yaml
+# docker-compose.yml — deploy to every server that runs OnlineWiki + SyncThing
+services:
+  onlinewiki:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      # ★ PERSISTENT STORAGE — map the container's DATA_DIR to an EXTERNAL location.
+      # Use a NAMED VOLUME for a single server; for multi-server SyncThing replication,
+      # use a HOST BIND-MOUNT (see below) so the host-side SyncThing daemon can read it.
+      - onlinewiki_data:/var/lib/onlinewiki
+      # Optional: mount logs out if you want them on the host for log collectors
+      - onlinewiki_logs:/var/log/onlinewiki
+
+volumes:
+  onlinewiki_data:     # OR replace with a bind mount: /data/onlinewiki:/var/lib/onlinewiki
+  onlinewiki_logs:
+```
+
+### 4. Multi-server SyncThing replication (Docker)
+
+For a load-balanced, multi-server deployment with SyncThing-replicated DATA_DIR:
+
+1. **On every server**, create a host directory that SyncThing will replicate, and map it as a **bind-mount** (not a named Docker volume):
+
+```yaml
+# docker-compose.yml — multi-server variant, SAME on every node
+services:
+  onlinewiki:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      # ★ HOST BIND-MOUNT: SyncThing on the host replicates this directory.
+      # The container-side path /var/lib/onlinewiki stays identical on every server,
+      # which keeps env configs identical across nodes.
+      - /data/onlinewiki:/var/lib/onlinewiki
+      - /var/log/onlinewiki:/var/log/onlinewiki
+```
+
+2. **Start the stack on every node:**
+   ```bash
+   docker compose up -d --build
+   ```
+
+3. **Set up SyncThing (host or sibling container) to sync ONLY the DATA_DIR folder:**
+   - On every node, point SyncThing at the **host-side** directory (e.g. `/data/onlinewiki`).
+   - Copy **TEMPLATE B** (the DATA_DIR-only template) from [`.stignore`](file:///c:/Users/leeda/OneDrive/Dev/Trae/OnlineWiki/.stignore#L30-L65) into `<host-DATA_DIR>/.stignore` (e.g. `/data/onlinewiki/.stignore`).
+   - This is the **default/recommended** template. It ignores transient `sessions/*.tmp`, `sessions/*.lock`, and any stray `logs/`; everything else (pages, uploads, avatars, `sessions/*.json`, `users.json`, `settings.json`) is replicated.
+
+4. **Enable sticky sessions** on your load balancer (same rules as bare-metal — see the Multi-Server section below).
+
+5. **Run ONE global session reaper** across the cluster (exactly one scheduled task, hitting any node's `POST /api/maintenance/expire-sessions` with `MAINTENANCE_TOKEN`).
+
+---
+
+## Alternative: Bare-metal / Local Dev Setup (npm start)
+
+Use this for single-server installs or local development on a Windows / Linux machine with Node.js installed.
 
 ### 1. Copy environment file
 
@@ -21,9 +153,13 @@ A lightweight, self-hosted internal collaborative wiki.
 Copy-Item .env.example .env
 ```
 
-Open `.env` and fill in your Active Directory details:
+Open `.env` and fill in your Active Directory details. For bare-metal you can keep `DATA_DIR=data` (inside the repo) or point it at a mapped drive / UNC:
 
 ```env
+# For bare-metal you can keep these defaults or switch to absolute paths:
+DATA_DIR=data
+LOG_DIR=logs
+
 SESSION_SECRET=<generate with: node -e "console.log(require('crypto').randomBytes(48).toString('hex'))">
 
 LDAP_URL=ldap://your-domain-controller.example.com
@@ -34,7 +170,7 @@ LDAP_BASE_DN=dc=example,dc=com
 
 > **Tip:** Set `LDAP_TLS_REJECT_UNAUTHORIZED=false` in `.env` if your domain controller uses a self-signed certificate.
 
-### 2. Install dependencies (already done)
+### 2. Install dependencies
 
 ```powershell
 npm install
@@ -57,19 +193,10 @@ The wiki will be available at **http://localhost:3000** (or the `PORT` from `.en
 ## Project Structure
 
 ```
-OnlineWiki/
+OnlineWiki/                             ← application code (ships inside Docker image; NOT synced by SyncThing)
 ├── server.js           — Express app, routes, LDAP auth
-├── .env                — Your configuration (never commit this)
-├── .env.example        — Config template
-├── <DATA_DIR>/         — ★ Consolidated persistent storage (default: data/)
-│   │                      Sync ONLY THIS ONE folder across servers.
-│   ├── pages/          — Wiki pages stored as .json files
-│   ├── uploads/        — Uploaded documents
-│   ├── avatars/        — User profile avatars (circular PNGs)
-│   ├── sessions/       — Session JSON files (SESSION_MODE=syncthing shares these)
-│   ├── users.json      — Local user registry + roles + password hashes
-│   └── settings.json   — Site title / tagline / home heading
-├── logs/               — Per-instance logs (do NOT sync; LOG_DIR env)
+├── .env                — Your configuration (never commit this; passed to container via --env-file)
+├── .env.example        — Config template (Docker-friendly defaults: DATA_DIR=/var/lib/onlinewiki)
 ├── views/
 │   ├── layout.ejs      — Shared shell (sidebar, topbar)
 │   ├── login.ejs       — AD login form
@@ -78,17 +205,38 @@ OnlineWiki/
 │   ├── edit.ejs        — TinyMCE editor
 │   ├── uploads.ejs     — Document manager
 │   └── error.ejs       — Error pages
-└── public/
-    ├── css/style.css   — Premium dark-mode CSS
-    └── js/
-        ├── app.js      — Sidebar, search, shared UI
-        └── editor.js   — TinyMCE init + slug + attachment picker
+├── public/
+│   ├── css/style.css   — Premium dark-mode CSS
+│   └── js/
+│       ├── app.js      — Sidebar, search, shared UI
+│       └── editor.js   — TinyMCE init + slug + attachment picker
+├── lib/
+│   └── logger.js       — Winston logger setup (reads LOG_DIR env)
+├── test_files/         — Local test fixtures / scratch data (never commit or sync)
+│
+├── <DATA_DIR>/         — ★ Consolidated persistent storage — the ONLY folder SyncThing replicates
+│   │                      Docker default: /var/lib/onlinewiki (mounted as external volume).
+│   │                      Bare-metal default: data/ (relative inside repo).
+│   ├── pages/          — Wiki pages stored as .json files
+│   ├── uploads/        — Uploaded documents
+│   ├── avatars/        — User profile avatars (circular PNGs)
+│   ├── sessions/       — Session JSON files (SESSION_MODE=syncthing shares these)
+│   ├── users.json      — Local user registry + roles + password hashes
+│   └── settings.json   — Site title / tagline / home heading
+│
+└── <LOG_DIR>/          — Per-instance logs (do NOT sync; LOG_DIR env)
+                          Docker default: /var/log/onlinewiki.
+                          Bare-metal default: logs/ (inside repo).
 ```
 
-`<DATA_DIR>` is controlled by the `DATA_DIR` env var (default: `data`). Use a relative
-path inside the repo, an absolute Windows drive letter (`X:\OnlineWiki-Data`), a UNC
-path (`\\filer.corp\wiki$`), or a Linux mount (`/srv/onlinewiki-data`).
-`LOG_DIR` is separate (default: `logs`) and must never be replicated.
+`<DATA_DIR>` is controlled by the `DATA_DIR` env var:
+
+| Environment | Default value | How it is provisioned |
+|---|---|---|
+| **Docker (production)** | `/var/lib/onlinewiki` | Mounted as a **bind-mount** (SyncThing multi-server) or **named volume** (single server) from outside the container |
+| Bare-metal / local dev | `data` (relative) | Created inside the repo; can be overridden to `X:\OnlineWiki-Data`, `\\filer.corp\wiki$`, or `/srv/onlinewiki-data` |
+
+`LOG_DIR` is separate (default `/var/log/onlinewiki` in Docker, `logs` in bare-metal) and must **never** be replicated between servers.
 
 ---
 
@@ -136,19 +284,27 @@ Check the console output for `[LDAP]` error lines when debugging auth issues.
 
 ## Multi-Server Deployment with SyncThing
 
-The wiki is designed to run on multiple servers simultaneously. **All persistent state lives inside a single configurable root folder (DATA_DIR, default: `data/`)** — point SyncThing at THIS ONE FOLDER on every server, and nothing else needs syncing. Sessions, pages, uploads, avatars, the user registry, and site settings all live inside DATA_DIR, so load-balanced users never need to re-login when the LB picks a different server.
+The wiki is designed to run on multiple servers simultaneously. **All persistent state lives inside a single configurable root folder, DATA_DIR** — point SyncThing at **THIS ONE FOLDER** on every server, and **nothing else** needs syncing. This is the default architecture. In Docker deployments, DATA_DIR is a persistent volume mounted from outside the container; in bare-metal deployments it can be a mapped drive, UNC share, or local path.
 
-Two env vars control storage layout. Configure them on **every** node:
+Sessions, pages, uploads, avatars, the user registry, and site settings all live inside DATA_DIR, so load-balanced users never need to re-login when the LB picks a different server.
 
-| Variable | Default | Sync? | Example values |
+Two env vars control storage layout. Configure them on **every** node (identical DATA_DIR, LOG_DIR can differ per server):
+
+| Variable | Default (Docker / prod) | Sync? | Example values |
 |---|---|---|---|
-| `DATA_DIR` | `data` | ✅ **YES — single SyncThing root** | `data`, `X:\OnlineWiki-Data`, `\\filer.corp\wiki$`, `/srv/onlinewiki-data` |
-| `LOG_DIR` | `logs` | ❌ NO — per-instance diagnostics | `logs`, `D:\Logs\OnlineWiki`, `/var/log/onlinewiki` |
+| `DATA_DIR` | `/var/lib/onlinewiki` | ✅ **YES — single SyncThing root (TEMPLATE B, default)** | `/var/lib/onlinewiki` (Docker bind-mount), `/data/onlinewiki` (Linux host), `X:\OnlineWiki-Data`, `\\filer.corp\wiki$`, `data` (legacy bare-metal inside repo) |
+| `LOG_DIR` | `/var/log/onlinewiki` | ❌ NO — per-instance diagnostics | `/var/log/onlinewiki`, `/var/log/onlinewiki-a`, `D:\Logs\WikiA`, `logs` (legacy) |
 
 On startup the banner prints both absolute paths — so you can verify at a glance that the nodes point at the right storage:
+
 ```
-Persistent data (DATA_DIR=data):     C:\Apps\OnlineWiki\data
-Local logs        (LOG_DIR =logs):   C:\Apps\OnlineWiki\logs
+# Docker node:
+Persistent data (DATA_DIR=/var/lib/onlinewiki): /var/lib/onlinewiki
+Local logs        (LOG_DIR =/var/log/onlinewiki):  /var/log/onlinewiki
+
+# Bare-metal node (legacy):
+Persistent data (DATA_DIR=X:\OnlineWiki-Data):  X:\OnlineWiki-Data
+Local logs        (LOG_DIR =D:\Logs\WikiA):      D:\Logs\WikiA
 ```
 
 ### Architecture overview
@@ -161,25 +317,35 @@ Local logs        (LOG_DIR =logs):   C:\Apps\OnlineWiki\logs
                  ┌───────────────┴───────────────┐
                  ▼                               ▼
   Server A (Office 1)                    Server B (Office 2)
-  ┌──────────────────────────────┐     ┌──────────────────────────────┐
-  │  node server.js              │     │  node server.js              │
-  │  DATA_DIR=X:\OnlineWiki-Data │     │  DATA_DIR=X:\OnlineWiki-Data │ ← SAME value
-  │  LOG_DIR =D:\Logs\WikiA      │     │  LOG_DIR =D:\Logs\WikiB      │ ← DIFFERENT
-  │                              │     │                              │
-  │  <DATA_DIR>/pages/       ←──┼─────┼──→ <DATA_DIR>/pages/        │
-  │  <DATA_DIR>/uploads/     ←──┼─────┼──→ <DATA_DIR>/uploads/      │
-  │  <DATA_DIR>/avatars/     ←──┼─────┼──→ <DATA_DIR>/avatars/      │
-  │  <DATA_DIR>/users.json   ←──┼─────┼──→ <DATA_DIR>/users.json    │
-  │  <DATA_DIR>/settings.json←──┼─────┼──→ <DATA_DIR>/settings.json │
-  │  <DATA_DIR>/sessions/*.json ←┼────┼──> <DATA_DIR>/sessions/*.json│ ← SESSIONS SYNCED
-  │                              │     │                              │
-  │  reaper cron: OFF            │     │  reaper cron: HOURLY (ONE!) │ ← scheduled task
-  └──────────────────────────────┘     └──────────────────────────────┘
-           ↕ SyncThing                                   ↕ SyncThing
-   (SINGLE FOLDER: DATA_DIR  —  ignores sessions/*.tmp, sessions/*.lock,
-    and any files matching the repo-root .stignore patterns when sharing
-    the project folder instead of just DATA_DIR)
+  ┌────────────────────────────────────────┐  ┌────────────────────────────────────────┐
+  │  ┌─ Docker container ──────────────┐    │  │  ┌─ Docker container ──────────────┐    │
+  │  │  node server.js              │    │  │  │  node server.js              │    │
+  │  │  DATA_DIR=/var/lib/onlinewiki  │    │  │  │  DATA_DIR=/var/lib/onlinewiki  │    │  ← SAME container-side value
+  │  │  LOG_DIR =/var/log/onlinewiki│    │  │  │  LOG_DIR =/var/log/onlinewiki│    │
+  │  └───────┬──────────────────┬───────┘    │  │  └───────┬──────────────────┬───────┘    │
+  │          ↕ bind-mount    ↕ bind-mount   │  │          ↕ bind-mount    ↕ bind-mount   │
+  │  ┌───────▼──────────┐ ┌───▼───────────┐  │  │  ┌───────▼──────────┐ ┌───▼───────────┐  │
+  │  │  HOST DATA_DIR   │ │  HOST LOG_DIR │  │  │  │  HOST DATA_DIR   │ │  HOST LOG_DIR │  │  ← LOG_DIRs are DIFFERENT
+  │  │  /data/onlinewiki │ │ /var/log/ow  │  │  │  │  /data/onlinewiki │ │ /var/log/ow  │  │
+  │  │                  │ │               │  │  │  │                  │ │               │  │
+  │  │  pages/       ←────┼─┼───────────────┼──┼──┼─→  pages/          │ │               │  │
+  │  │  uploads/     ←────┼─┼───────────────┼──┼──┼─→  uploads/        │ │               │  │
+  │  │  avatars/     ←────┼───────────────┼──┼──┼─→  avatars/        │ │               │  │
+  │  │  users.json   ←────┼─┼───────────────┼──┼──┼─→  users.json      │ │               │  │
+  │  │  settings.json←────┼───────────────┼──┼──┼─→  settings.json   │ │               │  │
+  │  │  sessions/*.json ←────┼───────────────┼──┼──┼─→  sessions/*.json │ │               │  │  ← SESSIONS SYNCED
+  │  │                  │ │               │  │  │  │                  │ │               │  │
+  │  │  reaper cron: OFF │ │               │  │  │  │  reaper cron: HOURLY│ │               │  │  ← EXACTLY ONE scheduled task
+  │  └───────────────────┘ └───────────────┘  │  │  └───────────────────┘ └───────────────┘  │
+  └──────────────┬────────────────────────────┘  └──────────────┬────────────────────────────┘
+         ↕ SyncThing                                          ↕ SyncThing
+   (SINGLE FOLDER: the HOST DATA_DIR  —  e.g. /data/onlinewiki
+    Ignores sessions/*.tmp, sessions/*.lock via TEMPLATE B
+    .stignore copied INTO the DATA_DIR folder root.
+    Application code lives inside the Docker image — never synced by SyncThing.)
 ```
+
+> **Bare-metal (legacy in-place variant): replace the Docker container layers with a plain `node server.js` process running directly on the host; DATA_DIR points directly to `X:\OnlineWiki-Data` or relative `data/`.
 
 ### Three session modes — pick one
 
@@ -198,8 +364,29 @@ All three modes keep identical `SESSION_SECRET` on every server — otherwise si
 ### Setup for SyncThing session sharing (SESSION_MODE=syncthing)
 
 **1. Deploy the application to every server**
+
+Choose **ONE** deployment path (Docker is recommended):
+
+```yaml
+# ★ DOCKER (recommended) — repeat on every server:
+#   1. Copy the project / Dockerfile + docker-compose.yml onto each server
+#   2. Prepare the persistent host directories for SyncThing to replicate:
+#        mkdir -p /data/onlinewiki /var/log/onlinewiki
+#   3. docker compose up -d --build
+services:
+  onlinewiki:
+    build: .
+    restart: unless-stopped
+    ports: ["3000:3000"]
+    env_file: .env
+    volumes:
+      - /data/onlinewiki:/var/lib/onlinewiki   # ★ HOST bind-mount → container DATA_DIR
+      - /var/log/onlinewiki:/var/log/onlinewiki # container LOG_DIR
+```
+
 ```powershell
-# Clone / copy the project to each server
+# Bare-metal (legacy / in-place) — repeat on every server:
+git clone <repo>  (or copy project folder)
 npm install                    # install deps locally — node_modules is NOT synced
 Copy-Item .env.example .env    # configure each server's .env independently
 ```
@@ -209,9 +396,13 @@ Copy-Item .env.example .env    # configure each server's .env independently
 Set these shared values on **every** node. All of them are read from `.env` at startup; they are **not** read from DATA_DIR:
 
 ```env
-# ── Storage — the ONE folder SyncThing needs to replicate
-DATA_DIR=X:\OnlineWiki-Data           # SAME value on every server (mapped drive / UNC / rel)
-LOG_DIR=D:\Logs\OnlineWiki            # DIFFERENT per server, or same default "logs"
+# ── Storage — the ONE folder SyncThing needs to replicate (★ Docker / prod defaults)
+DATA_DIR=/var/lib/onlinewiki            # SAME value on EVERY server (container-side path)
+LOG_DIR=/var/log/onlinewiki             # CAN be different per server, but keep it simple
+
+# For bare-metal Windows deployments instead:
+# DATA_DIR=X:\OnlineWiki-Data           # SAME value on every server
+# LOG_DIR=D:\Logs\OnlineWikiA           # DIFFERENT per server
 
 # ── Session sharing — identical on EVERY server
 SESSION_SECRET=paste-the-SAME-64-char-hex-string-on-ALL-servers
@@ -229,17 +420,24 @@ node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"   # SES
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"   # MAINTENANCE_TOKEN
 ```
 
-**3. Set up SyncThing share → ONE FOLDER (DATA_DIR)**
+**3. Set up SyncThing share → ONE FOLDER (DATA_DIR) ★ DEFAULT / RECOMMENDED**
 
-- On **every** server, open SyncThing and add a single "Folder" entry that points to the exact same absolute path you wrote in `DATA_DIR` (e.g. `X:\OnlineWiki-Data` or `/srv/onlinewiki-data`).
-- If DATA_DIR stays at the default `data` (inside the repo), you can share the whole project folder instead — the repo-level `.stignore` already excludes `node_modules`, `.env`, `logs`, and transient `sessions/*.tmp / *.lock` files.
-- If DATA_DIR is a **custom absolute path** (e.g. `X:\OnlineWiki-Data`), **copy the `.stignore` file into that custom folder root** and adjust the ignore patterns to strip the leading `data/` prefix: `sessions/*.tmp`, `sessions/*.tmp.*`, `sessions/*.lock` (no `data/` prefix because the sync root IS the data root now).
-- Contents that SyncThing must carry:
+SyncThing replicates **only the DATA_DIR persistent volume folder** — never the application code (code ships inside the Docker image or is deployed via git/robocopy independently).
+
+- On **every** server, open SyncThing and add a single "Folder" entry that points to the **host-side absolute path of DATA_DIR**:
+  - Docker Linux: `/data/onlinewiki` (the bind-mount source, not the container `/var/lib/onlinewiki` target)
+  - Bare-metal Windows: `X:\OnlineWiki-Data`
+  - Bare-metal Linux: `/srv/onlinewiki-data`
+- **Copy TEMPLATE B** (the DATA_DIR-only `.stignore`) from the project's [`.stignore`](file:///c:/Users/leeda/OneDrive/Dev/Trae/OnlineWiki/.stignore#L44-L64) and paste it as **`<DATA_DIR>/.stignore`** inside the shared folder. TEMPLATE B ignores:
+  - ❌ `sessions/*.tmp`, `sessions/*.tmp.*`, `sessions/*.lock` (transient atomic-write scratch)
+  - ❌ stray `logs/` or `*.log` files that might accidentally end up inside DATA_DIR
+  - ❌ `.stfolder/`, `.stversions/`, `.DS_Store`, `Thumbs.db` (SyncThing/OS metadata)
+- Contents that SyncThing must carry **and are NOT ignored**:
   - ✅ `pages/`, `uploads/`, `avatars/`
   - ✅ `users.json`, `settings.json`
   - ✅ `sessions/*.json` (the final session files — not the tmp/lock scratch!)
-- Contents SyncThing must **ignore** inside the shared folder:
-  - ❌ `sessions/*.tmp`, `sessions/*.tmp.*`, `sessions/*.lock`
+
+> **Legacy / whole-repo share alternative (not recommended for Docker):** if you run bare-metal with DATA_DIR still at the relative `data/` inside the repo, you *can* share the entire project folder instead — use **TEMPLATE A** (further down in `.stignore`, already active in the repo-root copy) which additionally excludes `node_modules/`, `.env`, `logs/`, `test_files/`, and editor/OS cruft. For Docker deployments this approach is unnecessary because the code is baked into the image and never needs syncing.
 
 **4. Enable STICKY SESSIONS on your load balancer**
 
@@ -271,7 +469,15 @@ If you want to run the reaper *via the web UI* instead (as an administrator), th
 ```
 
 **6. Start the server on every node**
+
+```bash
+# ★ Docker (recommended)
+docker compose up -d --build
+docker compose logs -f onlinewiki    # tail logs to confirm startup
+```
+
 ```powershell
+# Bare-metal
 npm start
 ```
 
@@ -284,6 +490,11 @@ info: [session] mode=syncthing — <DATA_DIR>/sessions/ MUST be synced by SyncTh
 ```
 Plus the banner always prints the canonical DATA_DIR + LOG_DIR so you can confirm both nodes point to the same share:
 ```
+# Docker:
+Persistent data (DATA_DIR=/var/lib/onlinewiki): /var/lib/onlinewiki
+Local logs        (LOG_DIR =/var/log/onlinewiki):  /var/log/onlinewiki
+
+# Bare-metal Windows:
 Persistent data (DATA_DIR=X:\OnlineWiki-Data):  X:\OnlineWiki-Data
 Local logs        (LOG_DIR =D:\Logs\WikiA):      D:\Logs\WikiA
 ```
