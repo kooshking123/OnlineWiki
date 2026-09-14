@@ -105,6 +105,7 @@
   </div>
   <div class="children-grid">
     <% children.forEach(child => { %>
+      <div class="child-card-wrap">
       <a href="/pages/<%= child.slug %>" class="child-card">
         <div class="child-card-body">
           <span class="child-card-title"><%= child.title %></span>
@@ -127,6 +128,39 @@
         </div>
         <svg class="child-card-arrow" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
       </a>
+      <% if (canEdit) { %>
+        <div class="child-card-actions" role="group" aria-label="Reorder <%= e(child.title) %>">
+          <% if (child._canMoveUp) { %>
+            <form method="POST" action="/pages/<%= child.slug %>/move">
+              <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+              <input type="hidden" name="direction" value="up" />
+              <input type="hidden" name="redirect" value="/pages/<%= page.slug %>#childrenHeading" />
+              <button type="submit" class="btn btn-reorder" aria-label="Move <%= e(child.title) %> up" title="Move up">
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="18 15 12 9 6 15"/></svg>
+              </button>
+            </form>
+          <% } else { %>
+            <span class="btn btn-reorder btn-disabled" aria-hidden="true" title="First child — cannot move higher">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="18 15 12 9 6 15"/></svg>
+            </span>
+          <% } %>
+          <% if (child._canMoveDown) { %>
+            <form method="POST" action="/pages/<%= child.slug %>/move">
+              <input type="hidden" name="_csrf" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>" />
+              <input type="hidden" name="direction" value="down" />
+              <input type="hidden" name="redirect" value="/pages/<%= page.slug %>#childrenHeading" />
+              <button type="submit" class="btn btn-reorder" aria-label="Move <%= e(child.title) %> down" title="Move down">
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+            </form>
+          <% } else { %>
+            <span class="btn btn-reorder btn-disabled" aria-hidden="true" title="Last child — cannot move lower">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+            </span>
+          <% } %>
+        </div>
+      <% } %>
+      </div>
     <% }); %>
   </div>
 </section>

@@ -2113,6 +2113,127 @@ select.form-input { cursor: pointer; }
 .admin-footer-note svg { flex-shrink: 0; margin-top: 0.15rem; }
 .admin-footer-note strong { color: var(--c-text-sub); }
 
+/* ── Page / child reorder controls ──────────────────────────────────────── */
+
+/* Square icon-only reorder buttons — used everywhere for up/down sibling swap */
+.btn-reorder {
+  min-width: 24px;
+  min-height: 24px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin: 0;
+  border-radius: calc(var(--r) - 2px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  color: var(--c-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  transition: background var(--t), color var(--t), border-color var(--t), opacity var(--t);
+  cursor: pointer;
+}
+.btn-reorder:hover {
+  background: var(--c-bg-overlay);
+  border-color: var(--c-border);
+  color: var(--c-text);
+}
+.btn-reorder:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 1px;
+}
+.btn-reorder svg { width: 13px; height: 13px; flex-shrink: 0; display: block; }
+.btn-reorder.btn-disabled {
+  pointer-events: none;
+  opacity: 0.28;
+  cursor: default;
+}
+
+/* Children grid on page view — overlay hover pill in card corner */
+.child-card-wrap {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+.child-card-wrap .child-card {
+  padding-right: 4rem; /* reserve space so action buttons don't cover title/meta */
+}
+.child-card-actions {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.18rem;
+  z-index: 2;
+  padding: 0.18rem;
+  background: var(--c-bg-overlay);
+  border: 1px solid var(--c-border-muted);
+  border-radius: calc(var(--r) + 1px);
+  opacity: 0;
+  transform: translateY(-1px);
+  transition: opacity var(--t), transform var(--t);
+}
+.child-card-wrap:hover .child-card-actions,
+.child-card-wrap:focus-within .child-card-actions {
+  opacity: 1;
+  transform: translateY(0);
+}
+.child-card-actions form,
+.child-row-actions form,
+.card-reorder-cluster form {
+  display: inline-flex;
+  margin: 0;
+  padding: 0;
+}
+
+/* Home: chapter rows inside section-card-children */
+.section-card-children li.section-child-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  min-height: 28px;
+}
+.section-card-children li.section-child-row .section-child-link {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.child-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.18rem;
+  padding: 0.12rem;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--t);
+}
+li.section-child-row:hover .child-row-actions,
+li.section-child-row:focus-within .child-row-actions {
+  opacity: 1;
+}
+
+/* Home: section card footer — reorder cluster next to Open/Add */
+.section-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.section-card-footer > .btn { flex-shrink: 0; }
+.card-reorder-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.18rem;
+  padding: 0.12rem;
+  margin-left: auto;
+  opacity: 0.85;
+  transition: opacity var(--t);
+}
+.card-reorder-cluster:hover { opacity: 1; }
+
 @media (max-width: 768px) {
   .admin-legend { gap: 0.6rem; }
   .admin-table-wrap { overflow-x: auto; }

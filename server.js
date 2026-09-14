@@ -165,6 +165,10 @@ app.set('layout', 'layout');
 app.set('layout extractScripts', false);
 app.set('layout extractStyles', false);
 app.set('layout extractMetas', false);
+// HTML-escape helper available in every EJS render (home/page/admin/users/…).
+// `escapeHtmlAttr` below is a function declaration (hoisted), so referencing it
+// here is safe even though its body appears later in the file.
+app.locals.e = escapeHtmlAttr;
 
 // ─── Static assets ─────────────────────────────────────────────────────────────
 // Serve TinyMCE from its npm package — no CDN/API-key required
@@ -1059,6 +1063,16 @@ app.post('/logout', ensureAuth, (req, res) => {
 app.get('/', ensureAuth, (req, res) => {
   const pages = listPages();
   const tree  = buildTree(pages);
+  // Annotate each sibling list (roots + any rendered child levels) with
+  // _canMoveUp/_canMoveDown so editors can reorder directly from the home view.
+  // Safe because buildTree() returns fresh spread objects, not the page records.
+  (function annotateSiblings(list) {
+    list.forEach((n, i, arr) => {
+      n._canMoveUp   = i > 0;
+      n._canMoveDown = i >= 0 && i < arr.length - 1;
+      if (Array.isArray(n.children) && n.children.length) annotateSiblings(n.children);
+    });
+  })(tree);
   res.render('home', { title: 'Wiki Home — OnlineWiki', pages, tree });
 });
 
@@ -1127,9 +1141,12 @@ app.get('/pages/:slug', ensureAuth, (req, res) => {
   const pages     = listPages();
   const tree      = buildTree(pages);
   const ancestors = getAncestors(req.params.slug, pages);
-  // Direct children for the "In This Section" panel
+  // Direct children for the "In This Section" panel; annotate each with
+  // per-child move-up/move-down flags so editors can reorder inline.
   const treeNode  = flattenTree(tree).find(n => n.slug === req.params.slug);
-  const children  = treeNode ? treeNode.children : [];
+  const rawChildren = treeNode ? treeNode.children : [];
+  const children  = rawChildren.map((c, i, arr) =>
+    ({ ...c, _canMoveUp: i > 0, _canMoveDown: i >= 0 && i < arr.length - 1 }));
   // Siblings for move-up / move-down buttons
   const parentSlug = page.parent || null;
   const siblings   = pages
@@ -1274,7 +1291,15 @@ app.post('/pages/:slug/move', ensureRole('editor'), (req, res) => {
     req.flash('success', `Page moved ${direction}.`);
   }
 
-  res.redirect(`/pages/${req.params.slug}`);
+  // Same-origin redirect override — keep editors on the page they were viewing
+  // (parent, home, section anchor) instead of always jumping to the moved page.
+  const safeRedirect =
+    (typeof req.body.redirect === 'string' &&
+     req.body.redirect.startsWith('/') &&
+     !req.body.redirect.startsWith('//'))
+    ? req.body.redirect
+    : null;
+  res.redirect(safeRedirect || `/pages/${req.params.slug}`);
 });
 
 // ─── Attachment management (JSON API) ─────────────────────────────────────────
