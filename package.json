@@ -2,6 +2,7 @@
   "name": "online-wiki",
   "version": "1.0.0",
   "description": "Lightweight Node.js internal wiki with LDAP/AD and local authentication, file uploads, and TinyMCE editing",
+  "license": "MIT",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

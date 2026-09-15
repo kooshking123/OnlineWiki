@@ -328,8 +328,16 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(express.json({ limit: '10mb' }));
 
 // ─── Session: single-server file store / SyncThing-synced / Redis ──────────────
-const SESSION_TTL_SECS  = (parseInt(process.env.SESSION_MAX_AGE_HOURS) || 8) * 3600;
-const SESSION_MODE_RAW  = (process.env.SESSION_MODE || '').trim().toLowerCase();
+const SESSION_TTL_SECS    = (parseInt(process.env.SESSION_MAX_AGE_HOURS) || 8) * 3600;
+// Client-side idle-timeout enforcement.
+// idleSecs = user inactivity window (no input events) before auto-logout.
+// warnSecs = how long before idleSecs to show the countdown warning modal.
+// Setting either to 0 disables enforcement entirely (no monitor, no modal).
+const SESSION_IDLE_SECS_RAW = parseInt(process.env.SESSION_IDLE_MINUTES);
+const SESSION_IDLE_SECS     = isNaN(SESSION_IDLE_SECS_RAW) ? (15 * 60) : Math.max(0, SESSION_IDLE_SECS_RAW * 60);
+const SESSION_WARN_SECS_RAW = parseInt(process.env.SESSION_IDLE_WARN_SECONDS);
+const SESSION_WARN_SECS     = isNaN(SESSION_WARN_SECS_RAW) ? 120 : Math.max(0, SESSION_WARN_SECS_RAW);
+const SESSION_MODE_RAW      = (process.env.SESSION_MODE || '').trim().toLowerCase();
 const SESSION_MODE_ENUM = { SINGLE: 'single', SYNCTHING: 'syncthing', REDIS: 'redis' };
 
 let SESSION_MODE = SESSION_MODE_ENUM.SINGLE;
@@ -688,6 +696,23 @@ app.use((req, res, next) => {
   res.locals.settings = loadSettings();
   res.locals.navFlat  = [];
   res.locals.navPages = [];
+  // Client-side idle enforcement config (rendered as window.__WIKI_CONFIG in
+  // layout.ejs). Disabled when either value is 0, or on static / unauthed pages.
+  // serverTsMs lets the browser compute a "last activity" baseline that is
+  // roughly in sync with the cookie's Max-Age clock (so the warn/expire
+  // countdowns don't drift by the amount of user-to-server clock skew).
+  const idleEnabled = req.isAuthenticated() && SESSION_IDLE_SECS > 0 && SESSION_WARN_SECS > 0 && SESSION_IDLE_SECS > SESSION_WARN_SECS;
+  res.locals.wikiConfig = idleEnabled ? {
+    idleSecs:       SESSION_IDLE_SECS,
+    warnSecs:       SESSION_WARN_SECS,
+    ttlSecs:        SESSION_TTL_SECS,
+    serverTsMs:     Date.now(),
+    keepaliveUrl:   '/api/session/keepalive',
+    logoutUrl:      '/logout',
+    loginUrl:       '/login',
+    userDisplay:    req.user?.displayName || req.user?.username || null,
+    userName:       req.user?.username || null
+  } : null;
   if (req.isAuthenticated()) {
     try {
       const pages = listPages();
@@ -1209,7 +1234,13 @@ const upload = multer({
 // ─── Authentication ────────────────────────────────────────────────────────────
 app.get('/login', (req, res) => {
   if (req.isAuthenticated()) return res.redirect('/');
-  res.render('login', { title: 'Sign In — OnlineWiki', layout: false, csrfToken: res.locals.csrfToken });
+  const inactiveReason = req.query.reason === 'inactive';
+  res.render('login', {
+    title: 'Sign In — OnlineWiki',
+    layout: false,
+    csrfToken: res.locals.csrfToken,
+    inactiveReason
+  });
 });
 
 // ─── Local admin credentials (optional fallback, set in .env) ────────────────
@@ -1310,9 +1341,13 @@ app.post('/login', (req, res, next) => {
 
 app.post('/logout', ensureAuth, (req, res) => {
   const u = req.user;
+  // Optional reason query-string so client-side idle monitor can tell the
+  // login page to show a "You were logged out due to inactivity" banner.
+  const reason = (req.query.reason || '').toString().slice(0, 32);
   req.logout(() => {
-    auditLogger.info('USER_LOGOUT', { username: u?.username, ip: req.ip });
-    res.redirect('/login');
+    auditLogger.info('USER_LOGOUT', { username: u?.username, ip: req.ip, reason: reason || 'manual' });
+    const target = reason === 'inactive' ? '/login?reason=inactive' : '/login';
+    res.redirect(target);
   });
 });
 
@@ -2398,6 +2433,23 @@ app.post('/profile/avatar/delete', ensureAuth, async (req, res) => {
     systemLogger.warn('Avatar delete failed', { user: req.user.username, error: e.message });
     req.flash('error', 'Failed to remove avatar.');
     res.redirect('/profile');
+  }
+});
+
+// ─── Session keepalive (lightweight, used by idle warning "Extend" button) ───
+// Returns HTTP 204 No Content on success; refreshes the rolling cookie Max-Age
+// (by virtue of `resave:false` + `rolling:true` on the session MW above,
+// touch() is sufficient to rewrite the Set-Cookie header on response).
+// Unauthenticated → 401 JSON. CSRF-safe by design: no-op GET, no state change
+// beyond extending the session TTL exactly like navigating to any page would.
+app.get('/api/session/keepalive', (req, res) => {
+  if (!req.isAuthenticated()) return res.status(401).json({ ok: false, error: 'Not authenticated' });
+  try {
+    if (typeof req.session?.touch === 'function') req.session.touch();
+    res.status(204).end();
+  } catch (e) {
+    systemLogger.warn('keepalive failed', { error: e?.message || String(e), user: req.user?.username });
+    res.status(500).json({ ok: false, error: 'Session update failed' });
   }
 });
 

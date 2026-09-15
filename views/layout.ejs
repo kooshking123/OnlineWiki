@@ -5,6 +5,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="<%= st.siteTagline %>" />
+  <% if (typeof csrfToken !== 'undefined' && csrfToken) { %>
+    <meta name="csrf-token" content="<%= csrfToken %>" />
+  <% } %>
   <title><%= typeof title !== 'undefined' && title ? title : st.siteTitle %></title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -161,6 +164,43 @@
 
   </div><!-- /.main-wrapper -->
 
+  <!-- ═══ Idle session warning modal (only rendered when idle enforcement on) ════ -->
+  <% if (typeof wikiConfig !== 'undefined' && wikiConfig) { %>
+    <div id="idleWarningModal" class="idle-modal hidden"
+         role="alertdialog" aria-labelledby="idleWarnTitle" aria-describedby="idleWarnBody" aria-modal="true" hidden>
+      <div class="idle-modal-backdrop" tabindex="-1"></div>
+      <div class="idle-modal-dialog" role="document">
+        <header class="idle-modal-header">
+          <svg class="idle-modal-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <div>
+            <h2 id="idleWarnTitle" class="idle-modal-title">Your session is about to expire</h2>
+            <% if (wikiConfig.userDisplay) { %>
+              <p class="idle-modal-user"><%= wikiConfig.userDisplay %></p>
+            <% } %>
+          </div>
+          <div id="idleWarnCountdown" class="idle-countdown" aria-live="polite">
+            <span class="idle-countdown-num" id="idleCountdownNum">--</span>
+            <span class="idle-countdown-unit">s</span>
+          </div>
+        </header>
+        <p id="idleWarnBody" class="idle-modal-body">
+          You have been inactive. For security, you will be signed out automatically.
+          Click <strong>Extend session</strong> to keep working, or <strong>Log out now</strong>
+          to sign out immediately.
+        </p>
+        <footer class="idle-modal-actions">
+          <button type="button" class="btn btn-ghost" id="idleLogoutBtn">Log out now</button>
+          <button type="button" class="btn btn-primary" id="idleExtendBtn">Extend session</button>
+        </footer>
+      </div>
+    </div>
+  <% } %>
+
+  <!-- Client-side config (session idle enforcement, etc) — always valid JSON. -->
+  <!-- Rendered BEFORE app.js so the idle monitor can read it on load. -->
+  <% if (typeof wikiConfig !== 'undefined' && wikiConfig) { %>
+    <script id="wikiConfig" type="application/json"><%- JSON.stringify(wikiConfig) %></script>
+  <% } %>
   <script src="/js/app.js"></script>
   <%- (typeof script  !== 'undefined' && script)  ? script  : '' %>
   <%- (typeof style   !== 'undefined' && style)   ? style   : '' %>

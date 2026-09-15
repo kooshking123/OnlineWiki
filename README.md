@@ -536,3 +536,311 @@ Verify session sharing end-to-end with:
 #   Stop-Service -Name OnlineWikiA    (or kill the node process)
 # On the browser: reload — should still be authenticated via Server B.
 ```
+
+---
+
+## Session Idle-Time Enforcement (Option C)
+
+OnlineWiki enforces an inactivity logout so abandoned sessions never stay open forever, even on shared kiosk-style machines. This is a layered security model:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Layer 1: Server-side hard ceiling (rolling cookie)                 │
+│           SESSION_MAX_AGE_HOURS=8 — even if the user clicks         │
+│           continuously, the session dies after 8h from first login. │
+│           Every authenticated HTTP request re-writes the cookie    │
+│           with a fresh Max-Age (rolling:true).                      │
+├─────────────────────────────────────────────────────────────────────┤
+│  Layer 2: Client-side inactivity monitor                           │
+│           SESSION_IDLE_MINUTES=15 — user must generate a human     │
+│           activity event (keypress, mouse click/move, scroll,      │
+│           touch, pointer, wheel, drag) within this window.         │
+│           Background fetches, keepalive polls, and asset loads     │
+│           do NOT count as "activity" — only real HUMAN input.      │
+├─────────────────────────────────────────────────────────────────────┤
+│  Layer 3: Pre-expiry warning modal (with live countdown)           │
+│           SESSION_IDLE_WARN_SECONDS=120 — N seconds before Layer 2  │
+│           triggers, an alertdialog appears with a countdown pill   │
+│           and two buttons:                                          │
+│             [Extend session]  →  GET /api/session/keepalive 204    │
+│                                   resets both browser idle clock   │
+│                                   AND server-side rolling cookie    │
+│             [Log out now]     →  POST /logout CSRF-safe form       │
+│           Countdown turns red when ≤ 30 s remaining.               │
+│           ESC key = same as [Log out now].                         │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### User-visible flow
+
+```
+ User is active ──► (nothing)
+        │
+        ▼  no keyboard/mouse for (SESSION_IDLE_MINUTES − SESSION_IDLE_WARN_SECONDS) seconds
+ Warning modal appears with countdown (W = 120 s default)
+        │
+        ├─ User clicks [Extend session] ──► GET /api/session/keepalive (204 No Content)
+        │                                     rolling cookie refreshed, idle timer reset
+        │                                     modal closes
+        │
+        ├─ Any HUMAN activity (keypress, mousedown, scroll, …)
+        │      ──► idle timer reset, modal closes (deduped via 60 ms debounce)
+        │
+        ├─ User clicks [Log out now] ──► POST /logout → /login
+        │
+        ▼  countdown reaches 0
+ Auto POST /logout?reason=inactive
+        │
+        ▼
+ /login?reason=inactive — friendly "You were signed out automatically
+              because you were inactive. Sign back in to continue."
+              info banner above the sign-in card
+```
+
+### Disable idle enforcement
+
+If you deploy OnlineWiki on a closed, air-gapped intranet where no auto-logout is desired, set either variable to zero:
+
+```env
+# Disables the idle monitor entirely:
+SESSION_IDLE_MINUTES=0
+#   OR
+SESSION_IDLE_WARN_SECONDS=0
+#   OR (safety gate)
+SESSION_IDLE_WARN_SECONDS >= SESSION_IDLE_MINUTES * 60
+```
+
+When disabled: no modal HTML is rendered, no wikiConfig is injected into the page, no activity listeners are attached, and the keepalive endpoint still returns 204 but is never called.
+
+### Audit trail
+
+Every logout (manual or idle) writes a `USER_LOGOUT` event to the **daily audit log** under `<LOG_DIR>/audit-YYYY-MM-DD.log`:
+
+```json
+{"event":"USER_LOGOUT","username":"jdoe","ip":"10.0.0.5","reason":"inactive"}
+{"event":"USER_LOGOUT","username":"jsmith","ip":"10.0.0.9","reason":"manual"}
+```
+
+`reason` values:
+- `"inactive"` — the client-side idle monitor fired a `POST /logout?reason=inactive`
+- `"manual"` — user clicked the topbar **Sign Out** button or the warning modal's **[Log out now]** button (default when no reason query param is present)
+
+---
+
+## Environment Variable Reference (Complete)
+
+All variables are read from `.env` at startup. For multi-server deployments, variables marked **(SHARED)** must be identical on every node; variables marked **(PER-NODE)** can differ.
+
+| Variable | Default | Scope | Type | Description |
+|---|---|---|---|---|
+| **Runtime** | | | | |
+| `NODE_ENV` | `development` | SHARED | string | `development` or `production` (affects error-page verbosity, Helmet settings) |
+| `LOG_LEVEL` | `info` | PER-NODE | string | Winston log level: `error` / `warn` / `info` / `http` / `debug` |
+| `PORT` | `3000` | PER-NODE | int | HTTP listen port. In Docker the container-internal port stays 3000; map externally via `-p 80:3000`. |
+| **Storage** | | | | |
+| `DATA_DIR` | Docker: `/var/lib/onlinewiki`<br>Bare-metal: `data` | SHARED* | path | ONE single persistent-storage root folder. SyncThing replicates ONLY this directory. *Container-side value identical on every node; host-side bind-mount source can vary by node. |
+| `LOG_DIR` | Docker: `/var/log/onlinewiki`<br>Bare-metal: `logs` | PER-NODE | path | Per-instance system + audit logs. **NEVER sync this directory** between servers. |
+| **Session core** | | | | |
+| `SESSION_SECRET` | (placeholder — MUST set) | SHARED | string | 48+ char hex string for signing cookies. Generate: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`. |
+| `SESSION_MAX_AGE_HOURS` | `8` | SHARED | int | Hard absolute cookie ceiling. Session dies this many hours after first login, even with continuous activity (rolling cookie extends it up to this ceiling from last HTTP request). |
+| `SESSION_MODE` | `single` | SHARED | enum | `single` — one server, built-in reaper.<br>`syncthing` — multi-server, sessions as DATA_DIR JSON, built-in reaper OFF, one global reaper cron required.<br>`redis` — Redis store, native TTL. |
+| `MAINTENANCE_TOKEN` | (optional, commented) | SHARED | string | Bearer token for ONE-nominated-server call to `POST /api/maintenance/expire-sessions` when `SESSION_MODE=syncthing`. |
+| **Idle enforcement (Option C)** | | | | |
+| `SESSION_IDLE_MINUTES` | `15` | SHARED | int | Human inactivity threshold (minutes). `0` = disable idle monitor. |
+| `SESSION_IDLE_WARN_SECONDS` | `120` | SHARED | int | Pre-expiry warning countdown (seconds). `0` = disable idle monitor. Must be `< SESSION_IDLE_MINUTES*60` or idle gate disables. |
+| **Redis (optional)** | | | | |
+| `REDIS_URL` | (not set) | SHARED | string | Priority Redis connection string: `redis[s]://[[username][:password]@][host][:port][/db-number]` |
+| `REDIS_HOST` | (not set) | SHARED | string | Fallback Redis hostname (used when `REDIS_URL` is blank) |
+| `REDIS_PORT` | `6379` | SHARED | int | Fallback Redis port |
+| `REDIS_USERNAME` | (not set) | SHARED | string | Fallback Redis ACL username |
+| `REDIS_PASSWORD` | (not set) | SHARED | string | Fallback Redis password |
+| `REDIS_DB` | `0` | SHARED | int | Fallback Redis logical DB number |
+| `REDIS_TLS` | `false` | SHARED | bool | Use `rediss://` (TLS) for the fallback connection |
+| `REDIS_PREFIX` | `wiki:sess:` | SHARED | string | Key prefix so multiple apps share one Redis instance without collisions |
+| **Local admin (dev / initial setup)** | | | | |
+| `LOCAL_ADMIN_USERNAME` | (commented) | SHARED | string | Bypass-LDAP local account username. Blank / unset in production = no local account. |
+| `LOCAL_ADMIN_PASSWORD` | (commented) | SHARED | string | Plaintext local admin password (bcrypt-hashed at boot). **Remove / leave blank in production.** |
+| `LOCAL_ADMIN_DISPLAY_NAME` | `Local Administrator` | SHARED | string | Friendly name shown in UI for the local admin. |
+| **LDAP / Active Directory** | | | | |
+| `LDAP_URL` | `ldap://dc.example.com` | SHARED | string | Use `ldap://` (port 389) or `ldaps://` (port 636, TLS-secured LDAP). |
+| `LDAP_BIND_DN` | `cn=svc-wiki,…` | SHARED | string | Read-only service account DN for searching the directory. |
+| `LDAP_BIND_PASSWORD` | (must set) | SHARED | string | Password for the bind service account. |
+| `LDAP_BASE_DN` | `dc=example,dc=com` | SHARED | string | Base DN under which user accounts are searched. |
+| `LDAP_SEARCH_FILTER` | `(sAMAccountName={{username}})` | SHARED | string | Directory filter — `{{username}}` is replaced with the submitted username at auth time. |
+| `LDAP_TLS_REJECT_UNAUTHORIZED` | `true` | PER-NODE | bool | Set to `false` only for dev / self-signed DC certificates. |
+
+---
+
+## License
+
+OnlineWiki is released under the **MIT License**. See [LICENSE](file:///c:/Users/leeda/OneDrive/Dev/Trae/OnlineWiki/LICENSE) for the full text.
+
+```
+MIT License
+
+Copyright (c) 2026 OnlineWiki Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+---
+
+## Third-Party Licenses & Attribution
+
+OnlineWiki distributes (via npm dependency bundling) the following open-source packages. Their respective license texts and copyright notices follow below.
+
+### Runtime dependencies
+
+| Package | Version (range) | SPDX License | Upstream URL |
+|---|---|---|---|
+| **connect-flash** | `^0.1.1` | MIT | `github.com/jaredhanson/connect-flash` |
+| **connect-redis** | `^7.1.1` | MIT | `github.com/tj/connect-redis` |
+| **csrf-csrf** | `^4.0.3` | MIT | `github.com/Psifi-Solutions/csrf-csrf` |
+| **csrf-sync** | `^4.2.1` | MIT | `github.com/Psifi-Solutions/csrf-sync` |
+| **dotenv** | `^16.4.5` | BSD-2-Clause | `github.com/motdotla/dotenv` |
+| **ejs** | `^3.1.10` | Apache-2.0 | `github.com/mde/ejs` |
+| **express** | `^4.19.2` | MIT | `github.com/expressjs/express` |
+| **express-ejs-layouts** | `^2.5.1` | MIT | `github.com/Soarez/express-ejs-layouts` |
+| **express-session** | `^1.18.0` | MIT | `github.com/expressjs/session` |
+| **fs-extra** | `^11.2.0` | MIT | `github.com/jprichardson/node-fs-extra` |
+| **helmet** | `^7.1.0` | MIT | `github.com/helmetjs/helmet` |
+| **ioredis** | `^5.4.1` | MIT | `github.com/redis/ioredis` |
+| **ldapauth-fork** | `^5.0.5` | MIT | `github.com/vesse/node-ldapauth-fork` |
+| **morgan** | `^1.10.0` | MIT | `github.com/expressjs/morgan` |
+| **multer** | `^1.4.5-lts.1` | MIT | `github.com/expressjs/multer` |
+| **passport** | `^0.7.0` | MIT | `github.com/jaredhanson/passport` |
+| **passport-ldapauth** | `^3.0.1` | MIT | `github.com/vesse/passport-ldapauth` |
+| **passport-local** | `^1.0.0` | MIT | `github.com/jaredhanson/passport-local` |
+| **sanitize-html** | `^2.17.7` | MIT | `github.com/apostrophecms/sanitize-html` |
+| **session-file-store** | `^1.5.0` | Apache-2.0 | `github.com/valery-barysok/session-file-store` |
+| **slugify** | `^1.6.6` | MIT | `github.com/simov/slugify` |
+| **tinymce** | `^7.1.2` | MIT OR GPL-2.0-or-later | `github.com/tinymce/tinymce-dist` |
+| **winston** | `^3.19.0` | MIT | `github.com/winstonjs/winston` |
+| **winston-daily-rotate-file** | `^5.0.0` | MIT | `github.com/winstonjs/winston-daily-rotate-file` |
+
+### Development dependencies
+
+| Package | Version | SPDX License | Upstream URL |
+|---|---|---|---|
+| **nodemon** | `^3.1.3` | MIT | `github.com/remy/nodemon` |
+
+### Full license texts (packages with non-MIT / attribution requirements)
+
+#### dotenv — BSD-2-Clause
+
+```
+BSD 2-Clause License
+
+Copyright (c) 2015, Scott Motte
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+#### ejs — Apache-2.0
+
+```
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+Copyright 2011 Matthew Eernisse (mde@fleegix.org)
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
+#### session-file-store — Apache-2.0
+
+```
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+Copyright 2015 Valery Barysok
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
+#### TinyMCE — Dual: MIT or GPL-2.0-or-later
+
+TinyMCE is included here under the **MIT** option. If you modify and redistribute the TinyMCE editor component itself (not just the bundled npm dependency), be aware of the alternative GPL-2.0-or-later license option and its copyleft obligations.
+
+```
+TinyMCE License (MIT option chosen)
+Copyright (c) 2024 Tiny Technologies, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+All MIT-licensed packages (the vast majority of the dependency list above) are redistributed under the same terms as stated in the OnlineWiki `LICENSE` file. For any packages whose individual license text is not reproduced above, the package's npm-distributed `LICENSE` / `README` file applies.

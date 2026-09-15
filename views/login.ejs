@@ -36,6 +36,12 @@
           <%= flash.error[0] %>
         </div>
       <% } %>
+      <% if (typeof inactiveReason !== 'undefined' && inactiveReason) { %>
+        <div class="flash flash-info" role="status" aria-live="polite">
+          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          You were signed out automatically because you were inactive. Sign back in to continue.
+        </div>
+      <% } %>
 
       <!-- Login form -->
       <form action="/login" method="POST" class="login-form" id="loginForm" novalidate>
