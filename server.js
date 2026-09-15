@@ -1356,15 +1356,21 @@ app.get('/', ensureAuth, (req, res) => {
   const pages = listPages();
   const tree  = buildTree(pages);
   // Annotate each sibling list (roots + any rendered child levels) with
-  // _canMoveUp/_canMoveDown so editors can reorder directly from the home view.
+  // _canMoveUp/_canMoveDown (sibling reorder) and _canPromote/_canDemote
+  // (hierarchy depth change) so editors can restructure directly from home.
   // Safe because buildTree() returns fresh spread objects, not the page records.
-  (function annotateSiblings(list) {
+  (function annotateSiblings(list, parentSlug /* null = root */) {
     list.forEach((n, i, arr) => {
       n._canMoveUp   = i > 0;
       n._canMoveDown = i >= 0 && i < arr.length - 1;
-      if (Array.isArray(n.children) && n.children.length) annotateSiblings(n.children);
+      // Promote: allowed when not already a root (has a parent to outdent from)
+      n._canPromote  = !!parentSlug;
+      // Demote: allowed when there is a previous sibling to nest under
+      // (index > 0 is both necessary AND sufficient — cycle guard runs server-side)
+      n._canDemote   = i > 0;
+      if (Array.isArray(n.children) && n.children.length) annotateSiblings(n.children, n.slug);
     });
-  })(tree);
+  })(tree, null);
   res.render('home', { title: 'Wiki Home — OnlineWiki', pages, tree, csrfToken: res.locals.csrfToken });
 });
 
@@ -1464,12 +1470,19 @@ app.get('/pages/:slug', ensureAuth, (req, res) => {
   const tree      = buildTree(pages);
   const ancestors = getAncestors(req.params.slug, pages);
   // Direct children for the "In This Section" panel; annotate each with
-  // per-child move-up/move-down flags so editors can reorder inline.
+  // per-child move-up/move-down (sibling reorder) AND promote/demote (depth)
+  // flags so editors can restructure inline without opening edit pages.
   const treeNode  = flattenTree(tree).find(n => n.slug === req.params.slug);
   const rawChildren = treeNode ? treeNode.children : [];
   const children  = rawChildren.map((c, i, arr) =>
-    ({ ...c, _canMoveUp: i > 0, _canMoveDown: i >= 0 && i < arr.length - 1 }));
-  // Siblings for move-up / move-down buttons
+    ({ ...c,
+       _canMoveUp: i > 0, _canMoveDown: i >= 0 && i < arr.length - 1,
+       // Children are always inside this page (their parent = our slug), so they
+       // are eligible to promote up to THIS page's parent level.
+       _canPromote: true,
+       // Demote requires a previous sibling to nest under.
+       _canDemote: i > 0 }));
+  // Siblings for move-up / move-down buttons + promote/demote depth controls
   const parentSlug = page.parent || null;
   const siblings   = pages
     .filter(p => (p.parent || null) === parentSlug)
@@ -1477,6 +1490,10 @@ app.get('/pages/:slug', ensureAuth, (req, res) => {
   const siblingIdx   = siblings.findIndex(s => s.slug === page.slug);
   const canMoveUp    = siblingIdx > 0;
   const canMoveDown  = siblingIdx >= 0 && siblingIdx < siblings.length - 1;
+  // Promote: any page that is NOT a root (has a parent) can be outdented one level.
+  const canPromote   = !!parentSlug;
+  // Demote: requires a previous sibling to nest under (position must not be first in siblings).
+  const canDemote    = siblingIdx > 0;
   // Enrich attachment metadata
   const attachments = (page.attachments || []).map(name => {
     const filePath = path.join(UPLOADS_DIR, name);
@@ -1484,7 +1501,7 @@ app.get('/pages/:slug', ensureAuth, (req, res) => {
     const stat     = exists ? fs.statSync(filePath) : null;
     return { name, originalName: name.replace(/^\d+_/, ''), exists, size: stat ? formatBytes(stat.size) : 'unknown', icon: fileIcon(name) };
   });
-  res.render('page', { title: `${page.title} — OnlineWiki`, page, attachments, ancestors, children, canMoveUp, canMoveDown, csrfToken: res.locals.csrfToken });
+  res.render('page', { title: `${page.title} — OnlineWiki`, page, attachments, ancestors, children, canMoveUp, canMoveDown, canPromote, canDemote, csrfToken: res.locals.csrfToken });
 });
 
 app.get('/pages/:slug/edit', ensureRole('editor'), (req, res) => {
@@ -1635,6 +1652,105 @@ app.post('/pages/:slug/move', ensureRole('editor'), (req, res) => {
 
   // Same-origin redirect override — keep editors on the page they were viewing
   // (parent, home, section anchor) instead of always jumping to the moved page.
+  const safeRedirect =
+    (typeof req.body.redirect === 'string' &&
+     req.body.redirect.startsWith('/') &&
+     !req.body.redirect.startsWith('//'))
+    ? req.body.redirect
+    : null;
+  res.redirect(safeRedirect || `/pages/${req.params.slug}`);
+});
+
+// ─── Promote / Demote (change depth level in hierarchy) ───────────────────────
+//
+//  promote (outdent / "move up a level"):
+//      page.parent → page.parent.parent (or null if grandparent doesn't exist).
+//      e.g. "Chapter 2" inside "Section 1" becomes a sibling of "Section 1" at the root.
+//      Safe because the new parent cannot create a cycle (it's strictly an ancestor).
+//
+//  demote (indent / "move down a level"):
+//      page.parent → the previous sibling in the current parent's children list.
+//      e.g. "Chapter 2" (2nd in "Section 1") becomes a child of "Chapter 1".
+//      Requires a previous sibling to exist at the same level.
+//
+// Both operations:
+//  * validate editor role (same route guard pattern as sibling reorder)
+//  * set position = append to end of NEW parent's children list (user can then
+//    reorder within the new parent via existing up/down buttons if desired)
+//  * write updatedAt so the "Update document after changes" semantic is honoured
+//  * redirect to the page in its new location so the sidebar + breadcrumb reflect it
+function promotePage(slug) {
+  const page = loadPage(slug);
+  if (!page) return { ok: false, msg: 'Page not found' };
+  const curParent = page.parent || null;
+  if (!curParent) return { ok: false, msg: 'Page is already at the top level' };
+  const parentPage = loadPage(curParent);
+  const newParent = parentPage && parentPage.parent ? parentPage.parent : null;
+
+  // Append to end of new siblings (order is user-adjustable afterwards)
+  const allPages = listPages();
+  const newSiblings = allPages.filter(p => (p.parent || null) === newParent);
+  page.parent    = newParent;
+  page.position  = newSiblings.length;
+  page.updatedAt = new Date().toISOString();
+  savePage(page);
+  return { ok: true, msg: `Page promoted — now a child of ${newParent ? '"' + newParent + '"' : 'the root level'}.` };
+}
+
+function demotePage(slug) {
+  const page = loadPage(slug);
+  if (!page) return { ok: false, msg: 'Page not found' };
+  const allPages = listPages();
+  const curParent = page.parent || null;
+  const siblings = allPages
+    .filter(p => (p.parent || null) === curParent)
+    .sort((a, b) => ((a.position ?? 9999) - (b.position ?? 9999)) || a.title.localeCompare(b.title));
+  const idx = siblings.findIndex(s => s.slug === slug);
+  if (idx <= 0) return { ok: false, msg: 'No previous sibling to nest under — move the page up among siblings first.' };
+
+  // Would moving under the previous sibling create a cycle? The previous sibling is
+  // a sibling so it is NOT a descendant of this page, but we still guard defensively
+  // using getDescendants (same check used in the edit-POST parent selector).
+  const newParent = siblings[idx - 1].slug;
+  const descendants = getDescendants(slug, allPages);
+  if (descendants.has(newParent) || newParent === slug) {
+    return { ok: false, msg: 'Cannot demote — that would create a cycle.' };
+  }
+
+  // Append to end of new parent's child list
+  const newSiblings = allPages.filter(p => (p.parent || null) === newParent);
+  page.parent    = newParent;
+  page.position  = newSiblings.length;
+  page.updatedAt = new Date().toISOString();
+  savePage(page);
+  return { ok: true, msg: `Page demoted — now a child of "${newParent}".` };
+}
+
+app.post('/pages/:slug/promote', ensureRole('editor'), (req, res) => {
+  const r = promotePage(req.params.slug);
+  if (!r.ok) req.flash('error', r.msg);
+  else {
+    const page = loadPage(req.params.slug);
+    auditLogger.info('PAGE_PROMOTED', { slug: req.params.slug, title: page?.title, newParent: page?.parent || null, by: req.user.username, ip: req.ip });
+    req.flash('success', r.msg);
+  }
+  const safeRedirect =
+    (typeof req.body.redirect === 'string' &&
+     req.body.redirect.startsWith('/') &&
+     !req.body.redirect.startsWith('//'))
+    ? req.body.redirect
+    : null;
+  res.redirect(safeRedirect || `/pages/${req.params.slug}`);
+});
+
+app.post('/pages/:slug/demote', ensureRole('editor'), (req, res) => {
+  const r = demotePage(req.params.slug);
+  if (!r.ok) req.flash('error', r.msg);
+  else {
+    const page = loadPage(req.params.slug);
+    auditLogger.info('PAGE_DEMOTED', { slug: req.params.slug, title: page?.title, newParent: page?.parent || null, by: req.user.username, ip: req.ip });
+    req.flash('success', r.msg);
+  }
   const safeRedirect =
     (typeof req.body.redirect === 'string' &&
      req.body.redirect.startsWith('/') &&
