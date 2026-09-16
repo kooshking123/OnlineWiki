@@ -22,7 +22,9 @@
   novalidate
 >
   <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-  <input type="hidden" name="confirmDuplicate" id="confirmDuplicate" value="false" />
+  <input type="hidden" name="confirmDuplicate" id="confirmDuplicate" value="<%= page && page.confirmDuplicate ? 'true' : 'false' %>" />
+  <%# Invisible default submitter inside the form so requestSubmit() has a submitter to use when the visible button lives outside the form and uses form="pageForm" attribute %>
+  <input type="submit" id="defaultSubmitBtn" tabindex="-1" aria-hidden="true" style="position:absolute;width:0;height:0;opacity:0;pointer-events:none" />
   <%# Concurrency sentinel — the server compares this to the on-disk updatedAt
       when saving. If they differ, a concurrent edit occurred on another server. %>
   <input type="hidden" name="editedAt"
@@ -44,7 +46,7 @@
             id="pageTitle"
             name="title"
             class="form-input form-input-xl"
-            value="<%= isNew ? '' : (page.title || '') %>"
+            value="<%= page && page.title ? page.title : '' %>"
             placeholder="Enter page title…"
             required
             autocomplete="off"
@@ -64,6 +66,7 @@
               id="pageSlug"
               name="slug"
               class="form-input"
+              value="<%= page && page.slug ? page.slug : '' %>"
               placeholder="auto-generated-from-title"
               autocomplete="off"
               pattern="[a-z0-9-]+"
@@ -81,7 +84,7 @@
             id="pageTags"
             name="tags"
             class="form-input"
-            value="<%= isNew ? '' : ((page && page.tags) ? page.tags.join(', ') : '') %>"
+            value="<%= (page && page.tags) ? (Array.isArray(page.tags) ? page.tags.join(', ') : page.tags) : '' %>"
             placeholder="api, getting-started, reference"
             autocomplete="off"
           />
@@ -105,14 +108,14 @@
       <!-- Publish actions -->
       <div class="editor-widget">
         <h2 class="editor-widget-title">Publish</h2>
-        <button type="submit" class="btn btn-primary btn-full" id="saveBtn" form="pageForm">
+        <button type="submit" class="btn btn-primary btn-full" id="saveBtn">
           <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
           Save Page
         </button>
         <% if (!isNew && page) { %>
-          <a href="/pages/<%= page.slug %>" class="btn btn-ghost btn-full">Discard Changes</a>
+          <a href="/pages/<%= page.slug %>" class="btn btn-ghost btn-full" data-tooltip="Discard any unsaved edits and return to this page.">Discard Changes</a>
         <% } else { %>
-          <a href="/" class="btn btn-ghost btn-full">Cancel</a>
+          <a href="/" class="btn btn-ghost btn-full" data-tooltip="Cancel creating this page and go back to Home.">Cancel</a>
         <% } %>
       </div>
 
@@ -189,7 +192,7 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="margin-right:0.35rem;display:inline-block;vertical-align:-1px"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
             Insert Image…
           </button>
-          <a href="/uploads" target="_blank" rel="noopener" class="btn btn-ghost btn-full btn-sm" style="justify-content:center;margin-top:0.25rem;text-decoration:none">
+          <a href="/uploads" target="_blank" rel="noopener" class="btn btn-ghost btn-full btn-sm" style="justify-content:center;margin-top:0.25rem;text-decoration:none" data-tooltip="Upload new files to the wiki library (opens Documents in a new tab).">
             <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="margin-right:0.35rem;display:inline-block;vertical-align:-1px"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
             Upload New Files…
           </a>
@@ -220,7 +223,8 @@
         </p>
         <button type="submit" form="pageDeleteForm" class="btn btn-danger btn-full btn-sm"
                 data-title="<%= e(page.title) %>"
-                onclick="return confirm('Delete ' + this.dataset.title + '? This cannot be undone.');">
+                onclick="return confirm('Delete ' + this.dataset.title + '? This cannot be undone.');"
+                data-tooltip="Delete this page (opens confirmation). ⚠ This page file is removed; child pages are promoted up one level, not deleted.">
           <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
           Delete Page…
         </button>
@@ -257,25 +261,32 @@
       <p class="editor-hint">Loading…</p>
     </div>
     <div class="modal-footer">
-      <a href="/uploads" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">
+      <a href="/uploads" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" data-tooltip="Open Documents manager in a new tab to upload files.">
         <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
         Manage Uploads
       </a>
-      <button class="btn btn-ghost" id="closeAttachPickerFooter">Close</button>
+      <button class="btn btn-ghost" id="closeAttachPickerFooter" data-tooltip="Close this attachment picker (nothing is attached).">Close</button>
     </div>
   </div>
 </div>
 
 <!-- Pass server-side data to editor.js -->
 <script>
-  window.WIKI = {
-    isNew:   <%- isNew ? 'true' : 'false' %>,
-    slug:    <%- JSON.stringify(isNew ? '' : (page ? page.slug : '')) %>,
-    originalTitle: <%- JSON.stringify(isNew ? '' : (page ? page.title || '' : '')) %>,
-    content: <%- JSON.stringify(isNew ? '' : (page && page.content ? page.content : '')) %>,
-    csrf:    <%- JSON.stringify(csrfToken || '') %>,
-    existingTitles: <%- JSON.stringify(existingTitles || []) %>
-  };
+  (function () {
+    var isNewPage = <%- isNew ? 'true' : 'false' %>;
+    var hasDraft  = !!(<%- page && page.title && !isNew ? 'false' : (page && page.confirmDuplicate ? 'true' : 'false') %>);
+    var originalTitle  = <%- JSON.stringify(isNew ? '' : (page ? page.title || '' : '')) %>;
+    var originalSlug   = <%- JSON.stringify(isNew ? '' : (page ? page.slug || '' : '')) %>;
+    var contentToLoad  = <%- JSON.stringify((page && page.content) ? page.content : '') %>;
+    window.WIKI = {
+      isNew:         isNewPage,
+      slug:          originalSlug,
+      originalTitle: originalTitle,
+      content:       contentToLoad,
+      csrf:          <%- JSON.stringify(csrfToken || '') %>,
+      existingTitles: <%- JSON.stringify(existingTitles || []) %>
+    };
+  })();
 </script>
 <script src="/tinymce/tinymce.min.js"></script>
 <script src="/js/editor.js"></script>

@@ -1391,12 +1391,44 @@ app.post('/pages/new', ensureRole('editor'), (req, res) => {
   const tags     = (req.body.tags    || '').split(',').map(t => t.trim()).filter(Boolean);
   const parent   = (req.body.parent  || '').trim() || null;
   const confirmDuplicate = (req.body.confirmDuplicate || '').toString().toLowerCase() === 'true';
+  const position = isNaN(parseInt(req.body.position)) ? 0 : parseInt(req.body.position);
 
   const slug = slugify(rawSlug, { lower: true, strict: true });
 
+  // Helper to re-render the edit page with the user's already-submitted draft
+  // values preserved. Used when validation / guard checks want to refuse the
+  // save WITHOUT losing the user's work (the old res.redirect path emptied
+  // the form entirely, leaving them thinking the page had been saved).
+  const rerenderNew = (extraPageProps = {}) => {
+    const pages       = listPages();
+    const tree        = buildTree(pages);
+    const selectPages = flattenForSelect(tree);
+    const existingTitles = pages.map(p => ({ title: p.title, slug: p.slug }));
+    const draftPage = {
+      title,
+      slug: slug || '',
+      content,
+      tags,
+      parent,
+      position,
+      attachments: [],
+      confirmDuplicate: true,
+      ...extraPageProps
+    };
+    res.render('edit', {
+      title: 'New Page — OnlineWiki',
+      page: draftPage,
+      isNew: true,
+      selectPages,
+      presetParent: parent || '',
+      existingTitles,
+      csrfToken: res.locals.csrfToken
+    });
+  };
+
   if (!title || !slug) {
     req.flash('error', 'Title and slug are required.');
-    return res.redirect('/pages/new');
+    return rerenderNew();
   }
 
   // Title-duplicate guard — case-insensitive match against any other page.
@@ -1405,8 +1437,8 @@ app.post('/pages/new', ensureRole('editor'), (req, res) => {
   if (dupTitleMatch && !confirmDuplicate) {
     req.flash('error',
       `Another page titled "${dupTitleMatch.title}" already exists (slug: ${dupTitleMatch.slug}). ` +
-      `Confirm the save again if you want to proceed with a duplicate title.`);
-    return res.redirect('/pages/new');
+      `Save again to confirm you want to proceed with a duplicate title.`);
+    return rerenderNew();
   }
 
   // Slug collision handling: since the filesystem requires unique slugs but
@@ -1432,16 +1464,17 @@ app.post('/pages/new', ensureRole('editor'), (req, res) => {
   // Validate parent exists (unless empty)
   if (parent && !loadPage(parent)) {
     req.flash('error', `Parent page "${parent}" does not exist.`);
-    return res.redirect('/pages/new');
+    return rerenderNew();
   }
 
-  // Auto-assign position = number of existing siblings (append to end)
+  // Auto-assign position = number of existing siblings (append to end; overrides
+  // any user-supplied position on new pages to match append-to-end behaviour).
   const siblings = listPages().filter(p => (p.parent || null) === parent);
-  const position = siblings.length;
+  const finalPosition = siblings.length;
 
   const now = new Date().toISOString();
   savePage({
-    title, slug: finalSlug, content, tags, parent, position,
+    title, slug: finalSlug, content, tags, parent, position: finalPosition,
     author:        req.user.username,
     authorDisplay: req.user.displayName,
     createdAt: now, updatedAt: now,
@@ -1541,11 +1574,47 @@ app.get('/pages/:slug/edit', ensureRole('editor'), (req, res) => {
 
 app.post('/pages/:slug/edit', ensureRole('editor'), (req, res) => {
   const slug = req.params.slug;
-  const page = loadPage(slug);
-  if (!page) return res.status(404).send('Page not found');
+  const existingPage = loadPage(slug);
+  if (!existingPage) return res.status(404).send('Page not found');
 
   const confirmDuplicate = (req.body.confirmDuplicate || '').toString().toLowerCase() === 'true';
-  const newTitle = (req.body.title || page.title || '').trim();
+  const newTitle = (req.body.title || existingPage.title || '').trim();
+  const newContent = sanitizeContent(req.body.content || '');
+  const newTags = (req.body.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+  const newParent = (req.body.parent || '').trim() || null;
+  const newPosition = isNaN(parseInt(req.body.position)) ? (existingPage.position ?? 0) : parseInt(req.body.position);
+
+  // Helper to re-render the edit form, preserving *every* value the user just
+  // submitted so their work is never lost on a guard/validation failure.
+  // confirmDuplicate is pre-set to true so, if this re-render was triggered by
+  // the title-duplicate guard, clicking "Save Page" a second time will pass
+  // through the guard and actually persist.
+  const rerenderEdit = () => {
+    const pages = listPages();
+    const tree  = buildTree(pages);
+    const selectPages = flattenForSelect(tree)
+      .filter(p => p.slug !== slug);
+    const existingTitles = pages.map(p => ({ title: p.title, slug: p.slug }));
+    const draftPage = {
+      ...existingPage,
+      slug,
+      title: newTitle,
+      content: newContent,
+      tags: newTags,
+      parent: newParent,
+      position: newPosition,
+      confirmDuplicate: true
+    };
+    res.render('edit', {
+      title: `Edit: ${draftPage.title} — OnlineWiki`,
+      page: draftPage,
+      isNew: false,
+      selectPages,
+      presetParent: newParent || '',
+      existingTitles,
+      csrfToken: res.locals.csrfToken
+    });
+  };
 
   // Title-duplicate guard — case-insensitive match against OTHER pages only
   // (the current page itself is allowed to keep its own title unchanged).
@@ -1557,15 +1626,15 @@ app.post('/pages/:slug/edit', ensureRole('editor'), (req, res) => {
     if (dupTitleMatch && !confirmDuplicate) {
       req.flash('error',
         `Another page titled "${dupTitleMatch.title}" already exists (slug: ${dupTitleMatch.slug}). ` +
-        `Confirm the save again if you want to proceed with a duplicate title.`);
-      return res.redirect(`/pages/${slug}/edit`);
+        `Save again to confirm you want to proceed with a duplicate title.`);
+      return rerenderEdit();
     }
   }
 
   // ── Optimistic concurrency check ─────────────────────────────────────────
   const { editedAt } = req.body;
-  if (editedAt && page.updatedAt && editedAt !== page.updatedAt) {
-    const who = page.lastEditorDisplay || page.lastEditor || 'someone else';
+  if (editedAt && existingPage.updatedAt && editedAt !== existingPage.updatedAt) {
+    const who = existingPage.lastEditorDisplay || existingPage.lastEditor || 'someone else';
     req.flash('error',
       `⚠ This page was modified by ${who} while you were editing. ` +
       `Your changes have been saved, but please review the content for any conflicts.`
@@ -1573,34 +1642,33 @@ app.post('/pages/:slug/edit', ensureRole('editor'), (req, res) => {
   }
 
   // ── Parent cycle / existence validation (mirrors GET handler's UI filter) ─
-  const newParent = (req.body.parent || '').trim() || null;
   if (newParent) {
     if (newParent === slug) {
       req.flash('error', 'A page cannot be its own parent.');
-      return res.redirect(`/pages/${slug}/edit`);
+      return rerenderEdit();
     }
     const descendants = getDescendants(slug, listPages());
     if (descendants.has(newParent)) {
       req.flash('error', `Cannot set parent to "${newParent}" — that would create a cycle.`);
-      return res.redirect(`/pages/${slug}/edit`);
+      return rerenderEdit();
     }
     if (!loadPage(newParent)) {
       req.flash('error', `Parent page "${newParent}" does not exist.`);
-      return res.redirect(`/pages/${slug}/edit`);
+      return rerenderEdit();
     }
   }
 
-  page.title             = (req.body.title || page.title).trim();
-  page.content           = sanitizeContent(req.body.content || '');
-  page.tags              = (req.body.tags || '').split(',').map(t => t.trim()).filter(Boolean);
-  page.parent            = newParent;
-  page.position          = isNaN(parseInt(req.body.position)) ? (page.position ?? 0) : parseInt(req.body.position);
-  page.updatedAt         = new Date().toISOString();
-  page.lastEditor        = req.user.username;
-  page.lastEditorDisplay = req.user.displayName;
-  savePage(page);
+  existingPage.title             = newTitle;
+  existingPage.content           = newContent;
+  existingPage.tags              = newTags;
+  existingPage.parent            = newParent;
+  existingPage.position          = newPosition;
+  existingPage.updatedAt         = new Date().toISOString();
+  existingPage.lastEditor        = req.user.username;
+  existingPage.lastEditorDisplay = req.user.displayName;
+  savePage(existingPage);
 
-  auditLogger.info('PAGE_EDITED', { slug: req.params.slug, title: page.title, editor: req.user.username, ip: req.ip });
+  auditLogger.info('PAGE_EDITED', { slug: req.params.slug, title: existingPage.title, editor: req.user.username, ip: req.ip });
   req.flash('success', 'Page saved successfully.');
   res.redirect(`/pages/${req.params.slug}`);
 });

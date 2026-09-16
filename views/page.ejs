@@ -56,43 +56,43 @@
     <form method="POST" action="/pages/<%= page.slug %>/promote" style="display:inline">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
       <% if (canPromote) { %>
-      <button type="submit" class="btn btn-sm btn-ghost" title="Move up a level (promote/outdent)" aria-label="Move page up a level">
+      <button type="submit" class="btn btn-sm btn-ghost" data-tooltip="Promote: move “<%= e(page.title) %>” up one level in the hierarchy (outdent)" aria-label="Move page up a level">
       <% } else { %>
-      <button type="button" class="btn btn-sm btn-ghost btn-disabled" disabled aria-disabled="true" title="Already at top level — cannot move higher" aria-label="Move page up a level (disabled)">
+      <button type="button" class="btn btn-sm btn-ghost btn-disabled" disabled aria-disabled="true" data-tooltip="Already at the top level — cannot promote further" aria-label="Move page up a level (disabled)">
       <% } %>
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19l-7-7 7-7"/><line x1="19" y1="12" x2="5" y2="12"/></svg>
       </button>
     </form>
     <form method="POST" action="/pages/<%= page.slug %>/demote" style="display:inline">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
       <% if (canDemote) { %>
-      <button type="submit" class="btn btn-sm btn-ghost" title="Move down a level (demote/indent)" aria-label="Move page down a level">
+      <button type="submit" class="btn btn-sm btn-ghost" data-tooltip="Demote: nest “<%= e(page.title) %>” under the previous sibling (indent)" aria-label="Move page down a level">
       <% } else { %>
-      <button type="button" class="btn btn-sm btn-ghost btn-disabled" disabled aria-disabled="true" title="No previous sibling to nest under — move the page up among siblings first" aria-label="Move page down a level (disabled)">
+      <button type="button" class="btn btn-sm btn-ghost btn-disabled" disabled aria-disabled="true" data-tooltip="No earlier sibling to nest under — first use ↑ Move up to place a sibling before it" aria-label="Move page down a level (disabled)">
       <% } %>
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
       </button>
     </form>
     <form method="POST" action="/pages/<%= page.slug %>/move" style="display:inline">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
       <input type="hidden" name="direction" value="up" />
       <% if (canMoveUp) { %>
-      <button type="submit" class="btn btn-sm btn-ghost" title="Move up among siblings" aria-label="Move page up">
+      <button type="submit" class="btn btn-sm btn-ghost" data-tooltip="Swap “<%= e(page.title) %>” with the item above it (same level)" aria-label="Move page up">
       <% } else { %>
-      <button type="button" class="btn btn-sm btn-ghost btn-disabled" disabled aria-disabled="true" title="First page at this level — cannot move higher" aria-label="Move page up (disabled)">
+      <button type="button" class="btn btn-sm btn-ghost btn-disabled" disabled aria-disabled="true" data-tooltip="First item at this level — nothing to swap with above" aria-label="Move page up (disabled)">
       <% } %>
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="18 15 12 9 6 15"/></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
       </button>
     </form>
     <form method="POST" action="/pages/<%= page.slug %>/move" style="display:inline">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
       <input type="hidden" name="direction" value="down" />
       <% if (canMoveDown) { %>
-      <button type="submit" class="btn btn-sm btn-ghost" title="Move down among siblings" aria-label="Move page down">
+      <button type="submit" class="btn btn-sm btn-ghost" data-tooltip="Swap “<%= e(page.title) %>” with the item below it (same level)" aria-label="Move page down">
       <% } else { %>
-      <button type="button" class="btn btn-sm btn-ghost btn-disabled" disabled aria-disabled="true" title="Last page at this level — cannot move lower" aria-label="Move page down (disabled)">
+      <button type="button" class="btn btn-sm btn-ghost btn-disabled" disabled aria-disabled="true" data-tooltip="Last item at this level — nothing to swap with below" aria-label="Move page down (disabled)">
       <% } %>
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
       </button>
     </form>
     <a href="/pages/new?parent=<%= page.slug %>" class="btn btn-sm btn-secondary">
@@ -104,7 +104,7 @@
       Edit
     </a>
     <span class="page-actions-sep" aria-hidden="true"></span>
-    <button type="button" class="btn btn-sm btn-danger" onclick="openDeletePageModal()" aria-haspopup="dialog" aria-controls="deletePageModal">
+    <button type="button" class="btn btn-sm btn-danger" onclick="openDeletePageModal()" aria-haspopup="dialog" aria-controls="deletePageModal" data-tooltip="Delete “<%= e(page.title) %>” (opens confirmation). ⚠ This page file is removed; child pages are promoted up one level, not deleted.">
       <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
       Delete
     </button>
@@ -126,7 +126,7 @@
       <span class="children-count-badge"><%= children.length %></span>
     </h2>
     <% if (canEdit) { %>
-    <a href="/pages/new?parent=<%= page.slug %>" class="btn btn-sm btn-ghost">
+    <a href="/pages/new?parent=<%= page.slug %>" class="btn btn-sm btn-ghost" data-tooltip="Add a new page to this section (child of “<%= e(page.title) %>”).">
       <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       Add page
     </a>
@@ -135,7 +135,7 @@
   <div class="children-grid">
     <% children.forEach(child => { %>
       <div class="child-card-wrap">
-      <a href="/pages/<%= child.slug %>" class="child-card">
+      <a href="/pages/<%= child.slug %>" class="child-card" data-tooltip="Open “<%= e(child.title) %>” — view content, children, attachments.">
         <div class="child-card-body">
           <span class="child-card-title"><%= child.title %></span>
           <% if (child.tags && child.tags.length) { %>
@@ -163,22 +163,22 @@
             <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
             <input type="hidden" name="redirect" value="/pages/<%= page.slug %>#childrenHeading" />
             <% if (child._canPromote) { %>
-            <button type="submit" class="btn btn-reorder" aria-label="Promote <%= e(child.title) %> up a level" title="Promote up a level">
+            <button type="submit" class="btn btn-reorder" aria-label="Promote <%= e(child.title) %> up a level" data-tooltip="Promote “<%= e(child.title) %>” up one level (sibling of this page)">
             <% } else { %>
-            <button type="button" class="btn btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Promote <%= e(child.title) %> up a level (disabled)" title="Child is already at the section root of this page — cannot promote higher from here">
+            <button type="button" class="btn btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Promote <%= e(child.title) %> up a level (disabled)" data-tooltip="Already at section root — cannot promote further">
             <% } %>
-              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19l-7-7 7-7"/><line x1="19" y1="12" x2="5" y2="12"/></svg>
             </button>
           </form>
           <form method="POST" action="/pages/<%= child.slug %>/demote">
             <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
             <input type="hidden" name="redirect" value="/pages/<%= page.slug %>#childrenHeading" />
             <% if (child._canDemote) { %>
-            <button type="submit" class="btn btn-reorder" aria-label="Demote <%= e(child.title) %> down a level" title="Demote down a level">
+            <button type="submit" class="btn btn-reorder" aria-label="Demote <%= e(child.title) %> down a level" data-tooltip="Demote: nest “<%= e(child.title) %>” under the previous child">
             <% } else { %>
-            <button type="button" class="btn btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Demote <%= e(child.title) %> down a level (disabled)" title="First child — move it up one among siblings to enable demoting it under an earlier child">
+            <button type="button" class="btn btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Demote <%= e(child.title) %> down a level (disabled)" data-tooltip="No earlier child to nest under — first add a sibling before this one">
             <% } %>
-              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
             </button>
           </form>
           <form method="POST" action="/pages/<%= child.slug %>/move">
@@ -186,11 +186,11 @@
             <input type="hidden" name="direction" value="up" />
             <input type="hidden" name="redirect" value="/pages/<%= page.slug %>#childrenHeading" />
             <% if (child._canMoveUp) { %>
-            <button type="submit" class="btn btn-reorder" aria-label="Move <%= e(child.title) %> up" title="Move up">
+            <button type="submit" class="btn btn-reorder" aria-label="Move <%= e(child.title) %> up" data-tooltip="Swap “<%= e(child.title) %>” with the child to its left">
             <% } else { %>
-            <button type="button" class="btn btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Move <%= e(child.title) %> up (disabled)" title="First child — cannot move higher">
+            <button type="button" class="btn btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Move <%= e(child.title) %> up (disabled)" data-tooltip="First child — nothing to swap with above">
             <% } %>
-              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="18 15 12 9 6 15"/></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
             </button>
           </form>
           <form method="POST" action="/pages/<%= child.slug %>/move">
@@ -198,11 +198,11 @@
             <input type="hidden" name="direction" value="down" />
             <input type="hidden" name="redirect" value="/pages/<%= page.slug %>#childrenHeading" />
             <% if (child._canMoveDown) { %>
-            <button type="submit" class="btn btn-reorder" aria-label="Move <%= e(child.title) %> down" title="Move down">
+            <button type="submit" class="btn btn-reorder" aria-label="Move <%= e(child.title) %> down" data-tooltip="Swap “<%= e(child.title) %>” with the child to its right">
             <% } else { %>
-            <button type="button" class="btn btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Move <%= e(child.title) %> down (disabled)" title="Last child — cannot move lower">
+            <button type="button" class="btn btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Move <%= e(child.title) %> down (disabled)" data-tooltip="Last child — nothing to swap with below">
             <% } %>
-              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
             </button>
           </form>
         </div>
@@ -265,10 +265,10 @@
       </p>
     <% } %>
     <div class="modal-actions">
-      <button class="btn btn-ghost" id="cancelDeletePageBtn">Cancel</button>
+      <button class="btn btn-ghost" id="cancelDeletePageBtn" data-tooltip="Keep “<%= e(page.title) %>” and close this confirmation dialog.">Cancel</button>
       <form action="/pages/<%= page.slug %>/delete" method="POST" style="margin:0">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-        <button type="submit" class="btn btn-danger">Delete Page</button>
+        <button type="submit" class="btn btn-danger" data-tooltip="Delete this page file now — any child pages are promoted up one level, not deleted.">Delete Page</button>
       </form>
     </div>
   </div>

@@ -2475,3 +2475,51 @@ mark.search-highlight {
   0%, 100% { box-shadow: 0 0 0 0 rgba(255, 204, 0, 0.0); }
   50%      { box-shadow: 0 0 0 4px rgba(255, 204, 0, 0.18); }
 }
+
+/* ─── Custom tooltip (replaces native title=, always shows ABOVE the pointer) ────── */
+.custom-tooltip {
+  position: fixed;
+  z-index: 2147483647;
+  max-width: 340px;
+  background: #0f172a;
+  color: #f1f5f9;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 450;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.45), 0 1px 3px rgba(0,0,0,0.25);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  white-space: normal;
+  word-break: break-word;
+  letter-spacing: 0.005em;
+}
+.custom-tooltip[data-visible="true"] {
+  opacity: 1;
+  transform: translateY(0);
+}
+.custom-tooltip::after {
+  content: "";
+  position: absolute;
+  left: var(--tt-arrow-left, 14px);
+  bottom: -5px;
+  width: 9px;
+  height: 9px;
+  margin-left: -4px;
+  background: #0f172a;
+  border-right: 1px solid #1e293b;
+  border-bottom: 1px solid #1e293b;
+  transform: rotate(45deg);
+}
+.custom-tooltip.is-flipped::after {
+  bottom: auto;
+  top: -5px;
+  border-right: none;
+  border-bottom: none;
+  border-left: 1px solid #1e293b;
+  border-top: 1px solid #1e293b;
+}

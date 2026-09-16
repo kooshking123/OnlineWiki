@@ -439,4 +439,109 @@
     tick();
   })();
 
+  // ── Custom tooltip (replaces native title=, positions ABOVE the cursor) ─────
+  (function setupTooltips() {
+    var tooltip = document.createElement('div');
+    tooltip.className = 'custom-tooltip';
+    tooltip.setAttribute('role', 'tooltip');
+    tooltip.setAttribute('data-visible', 'false');
+    document.body.appendChild(tooltip);
+
+    var hoverDelay = 180;
+    var showTimer = null;
+    var currentTarget = null;
+    var lastX = 0, lastY = 0;
+    var ABOVE_MARGIN = 14;
+    var BELOW_MARGIN = 18;
+    var LEFT_OFFSET = 10;
+
+    function closestTooltipTarget(el) {
+      while (el && el !== document.body) {
+        if (el.nodeType === 1 && el.hasAttribute('data-tooltip')) return el;
+        el = el.parentNode;
+      }
+      return null;
+    }
+
+    function show(text) {
+      tooltip.textContent = text;
+      tooltip.style.display = 'block';
+      position(lastX, lastY, true);
+      requestAnimationFrame(function () {
+        tooltip.setAttribute('data-visible', 'true');
+      });
+    }
+
+    function hide() {
+      tooltip.setAttribute('data-visible', 'false');
+    }
+
+    function position(cx, cy) {
+      var w = tooltip.offsetWidth;
+      var h = tooltip.offsetHeight;
+      var left = cx + LEFT_OFFSET;
+      var top;
+      var flipped = false;
+      if (cy - h - ABOVE_MARGIN < 6) {
+        top = cy + BELOW_MARGIN;
+        flipped = true;
+      } else {
+        top = cy - h - ABOVE_MARGIN;
+      }
+      var maxLeft = Math.max(4, window.innerWidth - w - 6);
+      if (left > maxLeft) left = maxLeft;
+      if (left < 6) left = 6;
+      tooltip.style.left = Math.round(left) + 'px';
+      tooltip.style.top = Math.round(top) + 'px';
+      var arrowLeft = cx - left;
+      if (arrowLeft < 12) arrowLeft = 12;
+      if (arrowLeft > w - 12) arrowLeft = w - 12;
+      tooltip.style.setProperty('--tt-arrow-left', Math.round(arrowLeft) + 'px');
+      tooltip.classList.toggle('is-flipped', flipped);
+    }
+
+    document.addEventListener('mouseover', function (e) {
+      var t = closestTooltipTarget(e.target);
+      if (!t) return;
+      if (t === currentTarget) return;
+      currentTarget = t;
+      clearTimeout(showTimer);
+      var text = t.getAttribute('data-tooltip');
+      if (!text) { hide(); return; }
+      lastX = e.clientX;
+      lastY = e.clientY;
+      showTimer = setTimeout(function () { show(text); }, hoverDelay);
+    }, true);
+
+    document.addEventListener('mouseout', function (e) {
+      var t = closestTooltipTarget(e.target);
+      if (!t) return;
+      var related = e.relatedTarget;
+      if (related && t.contains(related)) return;
+      if (t === currentTarget) {
+        currentTarget = null;
+        clearTimeout(showTimer);
+        hide();
+      }
+    }, true);
+
+    document.addEventListener('mousemove', function (e) {
+      lastX = e.clientX;
+      lastY = e.clientY;
+      if (tooltip.getAttribute('data-visible') === 'true') {
+        position(e.clientX, e.clientY);
+      }
+    }, true);
+
+    document.addEventListener('scroll', function () {
+      if (tooltip.getAttribute('data-visible') === 'true') {
+        position(lastX, lastY);
+      }
+    }, true);
+
+    window.addEventListener('resize', function () {
+      if (tooltip.getAttribute('data-visible') === 'true') position(lastX, lastY);
+    });
+  })();
+
 })();

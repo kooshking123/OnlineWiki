@@ -47,7 +47,7 @@
     <% tree.forEach(section => { %>
       <div class="section-card" id="sec_<%= section.slug %>">
         <div class="section-card-header">
-          <a href="/pages/<%= section.slug %>" class="section-card-title">
+          <a href="/pages/<%= section.slug %>" class="section-card-title" data-tooltip="Open section “<%= e(section.title) %>”.">
             <%= section.title %>
           </a>
           <% if (section.tags && section.tags.length) { %>
@@ -70,7 +70,7 @@
           <ul class="section-card-children" aria-label="Chapters in <%= section.title %>">
             <% section.children.slice(0,6).forEach(child => { %>
               <li class="section-child-row">
-                <a href="/pages/<%= child.slug %>" class="section-child-link">
+                <a href="/pages/<%= child.slug %>" class="section-child-link" data-tooltip="Open chapter “<%= e(child.title) %>” in “<%= e(section.title) %>”.">
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
                   <%= child.title %>
                   <% if (child.children && child.children.length) { %>
@@ -83,22 +83,22 @@
                       <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                       <input type="hidden" name="redirect" value="/#sec_<%= section.slug %>" />
                       <% if (child._canPromote) { %>
-                      <button type="submit" class="btn btn-reorder" aria-label="Promote <%= e(child.title) %> up a level" title="Promote up a level">
+                      <button type="submit" class="btn btn-reorder" aria-label="Promote <%= e(child.title) %> up a level" data-tooltip="Promote “<%= e(child.title) %>” up one level (root-level sibling of this section)">
                       <% } else { %>
-                      <button type="button" class="btn btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Promote <%= e(child.title) %> up a level (disabled)" title="Chapter is already at the section root of this section — cannot promote higher from here">
+                      <button type="button" class="btn btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Promote <%= e(child.title) %> up a level (disabled)" data-tooltip="Already at section root — cannot promote further">
                       <% } %>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19l-7-7 7-7"/><line x1="19" y1="12" x2="5" y2="12"/></svg>
                       </button>
                     </form>
                     <form method="POST" action="/pages/<%= child.slug %>/demote">
                       <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                       <input type="hidden" name="redirect" value="/#sec_<%= section.slug %>" />
                       <% if (child._canDemote) { %>
-                      <button type="submit" class="btn btn-reorder" aria-label="Demote <%= e(child.title) %> down a level" title="Demote down a level">
+                      <button type="submit" class="btn btn-reorder" aria-label="Demote <%= e(child.title) %> down a level" data-tooltip="Demote: nest “<%= e(child.title) %>” under the previous chapter">
                       <% } else { %>
-                      <button type="button" class="btn btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Demote <%= e(child.title) %> down a level (disabled)" title="First chapter — move it up one among siblings to enable demoting it under an earlier chapter">
+                      <button type="button" class="btn btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Demote <%= e(child.title) %> down a level (disabled)" data-tooltip="No earlier chapter to nest under — first add a sibling before it">
                       <% } %>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
                       </button>
                     </form>
                     <form method="POST" action="/pages/<%= child.slug %>/move">
@@ -106,11 +106,11 @@
                       <input type="hidden" name="direction" value="up" />
                       <input type="hidden" name="redirect" value="/#sec_<%= section.slug %>" />
                       <% if (child._canMoveUp) { %>
-                      <button type="submit" class="btn btn-reorder" aria-label="Move <%= e(child.title) %> up" title="Move up">
+                      <button type="submit" class="btn btn-reorder" aria-label="Move <%= e(child.title) %> up" data-tooltip="Swap “<%= e(child.title) %>” with the chapter above it">
                       <% } else { %>
-                      <button type="button" class="btn btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Move <%= e(child.title) %> up (disabled)" title="First chapter — cannot move higher">
+                      <button type="button" class="btn btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Move <%= e(child.title) %> up (disabled)" data-tooltip="First chapter — nothing to swap with above">
                       <% } %>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="18 15 12 9 6 15"/></svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
                       </button>
                     </form>
                     <form method="POST" action="/pages/<%= child.slug %>/move">
@@ -118,11 +118,11 @@
                       <input type="hidden" name="direction" value="down" />
                       <input type="hidden" name="redirect" value="/#sec_<%= section.slug %>" />
                       <% if (child._canMoveDown) { %>
-                      <button type="submit" class="btn btn-reorder" aria-label="Move <%= e(child.title) %> down" title="Move down">
+                      <button type="submit" class="btn btn-reorder" aria-label="Move <%= e(child.title) %> down" data-tooltip="Swap “<%= e(child.title) %>” with the chapter below it">
                       <% } else { %>
-                      <button type="button" class="btn btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Move <%= e(child.title) %> down (disabled)" title="Last chapter — cannot move lower">
+                      <button type="button" class="btn btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Move <%= e(child.title) %> down (disabled)" data-tooltip="Last chapter — nothing to swap with below">
                       <% } %>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
                       </button>
                     </form>
                   </span>
@@ -140,9 +140,9 @@
         <% } %>
 
         <div class="section-card-footer">
-          <a href="/pages/<%= section.slug %>" class="btn btn-sm btn-ghost">Open →</a>
+          <a href="/pages/<%= section.slug %>" class="btn btn-sm btn-ghost" data-tooltip="Open “<%= e(section.title) %>” — view content, chapters, edit controls.">Open →</a>
           <% if (canEdit) { %>
-          <a href="/pages/new?parent=<%= section.slug %>" class="btn btn-sm btn-ghost">
+          <a href="/pages/new?parent=<%= section.slug %>" class="btn btn-sm btn-ghost" data-tooltip="Add a new chapter to section “<%= e(section.title) %>”.">
             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             Add chapter
           </a>
@@ -151,22 +151,22 @@
               <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
               <input type="hidden" name="redirect" value="/#sec_<%= section.slug %>" />
               <% if (section._canPromote) { %>
-              <button type="submit" class="btn btn-sm btn-ghost btn-reorder" aria-label="Promote section <%= e(section.title) %> up a level" title="Promote section up a level">
+              <button type="submit" class="btn btn-sm btn-ghost btn-reorder" aria-label="Promote section <%= e(section.title) %> up a level" data-tooltip="Promote section “<%= e(section.title) %>” up one level">
               <% } else { %>
-              <button type="button" class="btn btn-sm btn-ghost btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Promote section <%= e(section.title) %> up a level (disabled)" title="Section is already at the root level — cannot promote higher">
+              <button type="button" class="btn btn-sm btn-ghost btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Promote section <%= e(section.title) %> up a level (disabled)" data-tooltip="Already at wiki root level — cannot promote further">
               <% } %>
-                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19l-7-7 7-7"/><line x1="19" y1="12" x2="5" y2="12"/></svg>
               </button>
             </form>
             <form method="POST" action="/pages/<%= section.slug %>/demote">
               <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
               <input type="hidden" name="redirect" value="/#sec_<%= section.slug %>" />
               <% if (section._canDemote) { %>
-              <button type="submit" class="btn btn-sm btn-ghost btn-reorder" aria-label="Demote section <%= e(section.title) %> down a level" title="Demote section down a level">
+              <button type="submit" class="btn btn-sm btn-ghost btn-reorder" aria-label="Demote section <%= e(section.title) %> down a level" data-tooltip="Demote: nest “<%= e(section.title) %>” under the previous section">
               <% } else { %>
-              <button type="button" class="btn btn-sm btn-ghost btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Demote section <%= e(section.title) %> down a level (disabled)" title="First section at root — move it up one among sibling sections to enable demoting it under an earlier section">
+              <button type="button" class="btn btn-sm btn-ghost btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Demote section <%= e(section.title) %> down a level (disabled)" data-tooltip="First section at root — no earlier section to nest it under">
               <% } %>
-                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
               </button>
             </form>
             <form method="POST" action="/pages/<%= section.slug %>/move">
@@ -174,11 +174,11 @@
               <input type="hidden" name="direction" value="up" />
               <input type="hidden" name="redirect" value="/#sec_<%= section.slug %>" />
               <% if (section._canMoveUp) { %>
-              <button type="submit" class="btn btn-sm btn-ghost btn-reorder" aria-label="Move section <%= e(section.title) %> up" title="Move section up">
+              <button type="submit" class="btn btn-sm btn-ghost btn-reorder" aria-label="Move section <%= e(section.title) %> up" data-tooltip="Swap “<%= e(section.title) %>” with the section to its left">
               <% } else { %>
-              <button type="button" class="btn btn-sm btn-ghost btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Move section <%= e(section.title) %> up (disabled)" title="First section — cannot move higher">
+              <button type="button" class="btn btn-sm btn-ghost btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Move section <%= e(section.title) %> up (disabled)" data-tooltip="First section — nothing to swap with above">
               <% } %>
-                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="18 15 12 9 6 15"/></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
               </button>
             </form>
             <form method="POST" action="/pages/<%= section.slug %>/move">
@@ -186,11 +186,11 @@
               <input type="hidden" name="direction" value="down" />
               <input type="hidden" name="redirect" value="/#sec_<%= section.slug %>" />
               <% if (section._canMoveDown) { %>
-              <button type="submit" class="btn btn-sm btn-ghost btn-reorder" aria-label="Move section <%= e(section.title) %> down" title="Move section down">
+              <button type="submit" class="btn btn-sm btn-ghost btn-reorder" aria-label="Move section <%= e(section.title) %> down" data-tooltip="Swap “<%= e(section.title) %>” with the section to its right">
               <% } else { %>
-              <button type="button" class="btn btn-sm btn-ghost btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Move section <%= e(section.title) %> down (disabled)" title="Last section — cannot move lower">
+              <button type="button" class="btn btn-sm btn-ghost btn-reorder btn-disabled" disabled aria-disabled="true" aria-label="Move section <%= e(section.title) %> down (disabled)" data-tooltip="Last section — nothing to swap with below">
               <% } %>
-                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
               </button>
             </form>
           </span>

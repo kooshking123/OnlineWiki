@@ -58,18 +58,18 @@
       </div>
 
       <div class="avatar-upload-row">
-        <label class="btn btn-ghost" for="avatarFile" style="cursor:pointer;">
+        <label class="btn btn-ghost" for="avatarFile" style="cursor:pointer;" data-tooltip="Pick a PNG, JPEG or WebP image from your device to use as a profile picture.">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
           Upload photo
         </label>
         <input type="file" id="avatarFile" accept="image/png,image/jpeg,image/webp" hidden />
-        <button type="button" class="btn btn-ghost" id="avatarResetBtn" style="display:none;">Reset</button>
+        <button type="button" class="btn btn-ghost" id="avatarResetBtn" style="display:none;" data-tooltip="Undo the current avatar crop and go back to the previous picture.">Reset</button>
       </div>
 
       <% if (viewAvatarUrl) { %>
         <form method="POST" action="/profile/avatar/delete" style="margin-top:1rem;" onsubmit="return confirm('Remove your avatar and go back to your initial letter?');">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-          <button type="submit" class="btn btn-sm btn-danger">
+          <button type="submit" class="btn btn-sm btn-danger" data-tooltip="Remove your avatar picture and revert to showing your initial letter.">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/></svg>
             Remove avatar
           </button>
@@ -124,7 +124,7 @@
         </div>
 
         <div class="settings-card-actions">
-          <a href="/" class="btn btn-ghost">Cancel</a>
+          <a href="/" class="btn btn-ghost" data-tooltip="Discard any unsaved profile edits and return to the wiki home page.">Cancel</a>
           <button type="submit" class="btn btn-primary">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
             Save changes

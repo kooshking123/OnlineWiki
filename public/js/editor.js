@@ -164,44 +164,148 @@
     promotion: false   // hide "Upgrade" banner
   });
 
-  // ── Before submit: ensure TinyMCE content is written to the textarea ─────
-  const pageForm = document.getElementById('pageForm');
-  if (pageForm) {
-    pageForm.addEventListener('submit', function (e) {
+  // ──────────────────────────────────────────────────────────────────────────
+  // Save flow — guard happens BEFORE any form submission is ever triggered
+  // ──────────────────────────────────────────────────────────────────────────
+  // The previous approach (guarding inside a submit event handler) was racy:
+  // once requestSubmit() / click() starts the form submission machinery,
+  // Chrome's async algorithm may schedule the native POST before the
+  // synchronous window.confirm() inside the submit handler can prevent it —
+  // hence "saved before dialog appeared" and "saved even on Cancel".
+  //
+  // The correct, race-free approach: do the ENTIRE duplicate check + confirm()
+  // inside the Save button click handler BEFORE WE EVER TELL THE FORM TO
+  // SUBMIT.  The form submit event is then reduced to a pure fast-path
+  // (either commit the real POST or defensively preventDefault if somehow the
+  // user triggered a submit by pressing Enter in a text field without going
+  // through our saveBtn click handler first).
+  // ──────────────────────────────────────────────────────────────────────────
+  const pageForm         = document.getElementById('pageForm');
+  const saveBtn          = document.getElementById('saveBtn');
+  const defaultSubmitBtn = document.getElementById('defaultSubmitBtn'); // inside <form>
+
+  function runDuplicateGuardAndMaybeConfirm() {
+    const titleInput    = document.getElementById('pageTitle');
+    const confirmInput  = document.getElementById('confirmDuplicate');
+    if (!titleInput || !confirmInput) return true; // no data to check → allow
+
+    var selfSlug       = (window.WIKI && window.WIKI.slug) ? window.WIKI.slug : '';
+    var originalTitle  = (window.WIKI && window.WIKI.originalTitle ? window.WIKI.originalTitle : '').trim().toLowerCase();
+    var existingTitles = (window.WIKI && window.WIKI.existingTitles) ? window.WIKI.existingTitles : [];
+
+    var newTitle      = (titleInput.value || '').trim();
+    var newTitleLower = newTitle.toLowerCase();
+    var isNewPage     = !window.WIKI || !!window.WIKI.isNew;
+    var titleChanged  = isNewPage || (newTitleLower !== originalTitle);
+
+    if (!newTitle || !titleChanged) return true;
+
+    var dup = null;
+    for (var i = 0; i < existingTitles.length; i++) {
+      var t = existingTitles[i];
+      if (!t || !t.title) continue;
+      var slugMatch  = t.slug === selfSlug;
+      var titleMatch = String(t.title).trim().toLowerCase() === newTitleLower;
+      if (titleMatch && !slugMatch) { dup = t; break; }
+    }
+    if (!dup) return true;
+    if (confirmInput.value === 'true') return true;  // already pre-confirmed (rerender flow)
+
+    var msg = 'Another page titled "' + dup.title +
+      '" already exists (slug: /pages/' + dup.slug + ').\n\nSave anyway with a duplicate title?';
+    var ok = window.confirm(msg);
+    if (ok) confirmInput.value = 'true';
+    return ok;
+  }
+
+  function commitRealSubmit() {
+    tinymce.triggerSave();
+    var submittingWithoutChecks = true; // belt-and-suspenders: no preventDefault on 2nd pass
+    var trySubmit = function () {
+      if (typeof pageForm.requestSubmit === 'function' && defaultSubmitBtn) {
+        try { pageForm.requestSubmit(defaultSubmitBtn); return; } catch (_) { /* fallthrough */ }
+      }
+      if (typeof pageForm.requestSubmit === 'function') {
+        try { pageForm.requestSubmit(); return; } catch (_) { /* fallthrough */ }
+      }
+      if (defaultSubmitBtn && typeof defaultSubmitBtn.click === 'function') {
+        defaultSubmitBtn.click();
+      } else {
+        pageForm.submit();
+      }
+    };
+    if (typeof setTimeout !== 'undefined') setTimeout(trySubmit, 0);
+    else trySubmit();
+  }
+
+  if (pageForm && saveBtn) {
+    // -------------------------------------------------------------------------
+    // Primary entry point.  EVERYTHING goes through this click handler.
+    // 1. Ensure TinyMCE content is written to the textarea RIGHT NOW (sync).
+    // 2. Run the duplicate-title guard synchronously — this may show the
+    //    confirm() dialog, and it returns true only if user chose OK OR there
+    //    was no duplicate to begin with.
+    // 3. If and ONLY if guard returned true, trigger the actual form submit.
+    // -------------------------------------------------------------------------
+    saveBtn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+
       tinymce.triggerSave();
 
-      const titleInput = document.getElementById('pageTitle');
-      const confirmInput = document.getElementById('confirmDuplicate');
-      const selfSlug = (window.WIKI && window.WIKI.slug) ? window.WIKI.slug : '';
-      const originalTitle = (window.WIKI && window.WIKI.originalTitle ? window.WIKI.originalTitle : '').trim().toLowerCase();
-      const existingTitles = (window.WIKI && window.WIKI.existingTitles) ? window.WIKI.existingTitles : [];
-
-      if (titleInput && confirmInput) {
-        const newTitle = (titleInput.value || '').trim();
-        const newTitleLower = newTitle.toLowerCase();
-        const isNewPage = !window.WIKI || !!window.WIKI.isNew;
-        // Only prompt if title differs from self's existing title (edit) or on new (create)
-        const titleChanged = isNewPage || (newTitleLower !== originalTitle);
-        if (newTitle && titleChanged) {
-          const dup = existingTitles.find(t => {
-            if (!t || !t.title) return false;
-            const slugMatch = t.slug === selfSlug;
-            const titleMatch = String(t.title).trim().toLowerCase() === newTitleLower;
-            return titleMatch && !slugMatch;
-          });
-          if (dup && confirmInput.value !== 'true') {
-            const msg = 'Another page titled "' + dup.title +
-              '" already exists (slug: /pages/' + dup.slug + ').\n\nSave anyway with a duplicate title?';
-            const ok = confirm(msg);
-            if (ok) {
-              confirmInput.value = 'true';
-            } else {
-              e.preventDefault();
-            }
-          }
-        }
+      var guardPassed = false;
+      try {
+        guardPassed = !!runDuplicateGuardAndMaybeConfirm();
+      } catch (err) {
+        guardPassed = false;
       }
+      if (!guardPassed) {
+        // User clicked Cancel on the dialog, or guard threw.  Do NOT submit.
+        return;
+      }
+      commitRealSubmit();
     });
+  }
+
+  if (pageForm) {
+    // -------------------------------------------------------------------------
+    // Belt-and-suspenders: someone may press Enter in a text field, which
+    // triggers the default submitter without going through saveBtn.click().
+    // In that case, run the guard AGAIN here, and block anything unexpected
+    // that didn't come from commitRealSubmit().
+    // -------------------------------------------------------------------------
+    var submitOk = false; // set true for exactly ONE event — the one we fire ourselves
+    pageForm.addEventListener('submit', function (e) {
+      tinymce.triggerSave();
+      if (submitOk) return;  // our own commitRealSubmit — let it through cleanly
+
+      // Any OTHER submit (Enter in a field, script-triggered from elsewhere, etc.)
+      // → re-run guard inline before allowing.  If guard fails, stop it.
+      e.preventDefault();
+      e.stopPropagation();
+      var passed = false;
+      try { passed = !!runDuplicateGuardAndMaybeConfirm(); } catch (_) { passed = false; }
+      if (!passed) return;
+      submitOk = true;
+      commitRealSubmit();
+    });
+
+    // We also expose the flag to commitRealSubmit (via closure) so the
+    // single-entry commit path uses the SAME gating:
+    // (replace the no-op var from earlier, used above)
+    (function patchCommitRef() {
+      // The commitRealSubmit function above already calls triggerSave and
+      // then requestSubmit().  When that fires the submit event, submitOk
+      // is still false, so the stop-gap above would preventDefault it.  We
+      // solve this by wrapping commitRealSubmit: flip submitOk → true FIRST,
+      // THEN fire requestSubmit — so the submit handler hits the fast-path
+      // return before preventDefault.
+      var orig = commitRealSubmit;
+      commitRealSubmit = function () {
+        submitOk = true;
+        orig();
+      };
+    })();
   }
 
   // ── Slug auto-generation (new pages only) ─────────────────────────────────

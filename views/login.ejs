@@ -79,6 +79,55 @@
       </form>
 
       <p class="login-help">Contact your IT administrator if you need access.</p>
+
+      <style>
+        [data-tooltip] { position: relative; }
+        [data-tooltip]::after {
+          content: attr(data-tooltip);
+          position: absolute;
+          left: 50%;
+          bottom: calc(100% + 8px);
+          transform: translateX(-50%);
+          background: #111827;
+          color: #f9fafb;
+          padding: 0.45rem 0.7rem;
+          border-radius: 8px;
+          font-size: 0.78rem;
+          font-weight: 500;
+          line-height: 1.35;
+          white-space: nowrap;
+          pointer-events: none;
+          opacity: 0;
+          transition: opacity 140ms ease, transform 140ms ease;
+          transform: translateX(-50%) translateY(4px);
+          z-index: 9999;
+          max-width: 320px;
+          white-space: normal;
+          box-shadow: 0 4px 14px rgba(0,0,0,0.2);
+          letter-spacing: 0.01em;
+        }
+        [data-tooltip]::before {
+          content: '';
+          position: absolute;
+          left: 50%;
+          bottom: calc(100% + 2px);
+          transform: translateX(-50%);
+          border: 5px solid transparent;
+          border-top-color: #111827;
+          pointer-events: none;
+          opacity: 0;
+          transition: opacity 140ms ease, transform 140ms ease;
+          transform: translateX(-50%) translateY(4px);
+          z-index: 9999;
+        }
+        [data-tooltip]:hover::after,
+        [data-tooltip]:focus-visible::after,
+        [data-tooltip]:hover::before,
+        [data-tooltip]:focus-visible::before {
+          opacity: 1;
+          transform: translateX(-50%) translateY(0);
+        }
+      </style>
     </div>
   </div>
 

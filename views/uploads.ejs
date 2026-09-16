@@ -24,7 +24,7 @@
   <h2 class="upload-zone-heading" id="uploadHeading">Upload a Document</h2>
   <form action="/uploads" method="POST" enctype="multipart/form-data" id="uploadForm">
     <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-    <div class="drop-zone" id="dropZone" tabindex="0" role="button" aria-label="Click or drag files here to upload">
+    <div class="drop-zone" id="dropZone" tabindex="0" role="button" aria-label="Click or drag files here to upload" data-tooltip="Drag & drop files here, or click Choose File below to select one from your device.">
       <div class="drop-zone-inner">
         <div class="drop-zone-icon" aria-hidden="true">
           <svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -46,7 +46,7 @@
       <div class="drop-zone-selected hidden" id="fileSelectedBanner">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
         <span id="selectedFileName">No file</span>
-        <button type="button" class="btn-text-danger" id="clearFileBtn" aria-label="Clear selected file">Remove</button>
+        <button type="button" class="btn-text-danger" id="clearFileBtn" aria-label="Clear selected file" data-tooltip="Remove the currently chosen file (nothing has been uploaded yet).">Remove</button>
       </div>
     </div>
     <div id="uploadActions" class="upload-actions">
@@ -94,7 +94,7 @@
               <td class="file-name-cell">
                 <span class="file-type-icon" aria-hidden="true"><%= f.icon %></span>
                 <div class="file-name-info">
-                  <span class="file-display-name" title="<%= f.originalName %>"><%= f.originalName %></span>
+                  <span class="file-display-name" data-tooltip="<%= f.originalName %>"><%= f.originalName %></span>
                   <span class="file-ext-badge"><%= f.ext %></span>
                 </div>
               </td>
@@ -120,6 +120,7 @@
                   data-filename="<%= f.name %>"
                   data-displayname="<%= f.originalName %>"
                   aria-label="Delete <%= f.originalName %>"
+                  data-tooltip="Delete “<%= f.originalName %>” from the library (removes it from any pages it is attached to)."
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                   Delete
@@ -151,10 +152,10 @@
       This will also remove it from any pages it's attached to.
     </p>
     <div class="modal-actions">
-      <button class="btn btn-ghost" id="cancelDeleteFileBtn">Cancel</button>
+      <button class="btn btn-ghost" id="cancelDeleteFileBtn" data-tooltip="Keep the file and close this confirmation dialog.">Cancel</button>
       <form id="deleteFileForm" method="POST" style="margin:0">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-        <button type="submit" class="btn btn-danger">Delete File</button>
+        <button type="submit" class="btn btn-danger" data-tooltip="Permanently delete this file from the library (cannot be undone).">Delete File</button>
       </form>
     </div>
   </div>
