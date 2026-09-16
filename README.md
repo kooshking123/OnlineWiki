@@ -706,7 +706,7 @@ deployments / redistributions must preserve the attribution notices.
 
 Clause (2) attribution text that must be displayed in the running installation:
 
-> **OnlineWiki** — Licensed under MIT (with attribution) · © 2026 OnlineWiki Contributors · https://github.com/onlinewiki/onlinewiki
+> **OnlineWiki** — Licensed under MIT (with attribution) · © 2026 OnlineWiki Contributors · https://github.com/kooshking123/OnlineWiki
 
 It must be reachable by a reasonable end-user action (footer, About page, Preferences, etc.) and must **not** be hidden behind a login wall if the deployment exposes any UI to anonymous or unprivileged users.
 
@@ -717,7 +717,7 @@ MIT License — With Attribution Requirement
 (SPDX short-form: MIT WITH Attribution-3.0-OnlineWiki)
 
 Copyright (c) 2026 OnlineWiki Contributors
-Project Home: https://github.com/onlinewiki/onlinewiki
+Project Home: https://github.com/kooshking123/OnlineWiki
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -743,7 +743,7 @@ furnished to do so, subject to the following conditions:
 
        "OnlineWiki — Licensed under MIT (with attribution) ·
         © 2026 OnlineWiki Contributors ·
-        https://github.com/onlinewiki/onlinewiki"
+        https://github.com/kooshking123/OnlineWiki"
 
    The attribution notice must NOT be hidden behind a login wall that is
    unavailable to anonymous or non-privileged users of the installation
