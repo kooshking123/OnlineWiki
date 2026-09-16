@@ -24,231 +24,261 @@ All persistent state (pages, uploads, avatars, sessions, users, settings) lives 
 
 ---
 
-## ★ Docker Deployment (Recommended for Production)
+<!-- ═══════════════════════════════════════════════════════════════════════
+     ARCHITECTURE OVERVIEW
+     Section 1 of README: High-level architecture before any deployment
+     step-by-step.  Introduce design, then drill into Deployment HOWTOs.
+     ═══════════════════════════════════════════════════════════════════════ -->
 
-### 1. Prepare the environment file
+## Architecture Overview
 
-```powershell
-Copy-Item .env.example .env
-```
+OnlineWiki is a **single-root, flat-file, horizontally-scalable wiki** designed for
+corporate intranets.  Its defining architectural principle is:
 
-Open `.env` and fill in the required values. The defaults in `.env.example` are already tuned for Docker:
+> **Every piece of persistent state lives inside exactly one configurable folder
+> (`DATA_DIR`).  Point a directory replicator (SyncThing, DFS-R, rsync, …) at that
+> one folder, and every server in the cluster converges to identical state.**
 
-```env
-# ── Docker-mounted persistent storage (already the default in .env.example)
-DATA_DIR=/var/lib/onlinewiki   # container-side path — mount a host dir / named volume here
-LOG_DIR=/var/log/onlinewiki    # container-side path — optional second volume
+Nothing else needs synchronising between nodes — the application code ships
+inside Docker images, and per-instance logs are deliberately kept separate.
 
-# ── Session sharing across containers (identical on every node)
-SESSION_SECRET=<generate: node -e "console.log(require('crypto').randomBytes(48).toString('hex'))">
-SESSION_MODE=syncthing         # data is replicated by SyncThing via the shared DATA_DIR volume
-MAINTENANCE_TOKEN=<generate:   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))">
+### Design Principles
 
-# ── LDAP / Active Directory
-LDAP_URL=ldap://your-domain-controller.example.com
-LDAP_BIND_DN=cn=svc-wiki,ou=ServiceAccounts,dc=example,dc=com
-LDAP_BIND_PASSWORD=your-service-account-password
-LDAP_BASE_DN=dc=example,dc=com
-```
-
-> **Tip:** Set `LDAP_TLS_REJECT_UNAUTHORIZED=false` in `.env` if your domain controller uses a self-signed certificate.
-
-### 2. Example Dockerfile
-
-```dockerfile
-# Dockerfile for OnlineWiki
-FROM node:20-bookworm-slim
-
-WORKDIR /app
-
-# Install deps first for better layer caching
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
-
-# Copy the rest of the application code
-COPY . .
-
-# Default port (override with -e PORT= if needed)
-EXPOSE 3000
-
-# ⚠ IMPORTANT: Do NOT declare a VOLUME here — volumes are declared in docker-compose.yml
-# or with `docker run -v` so you control the host-side path (needed for SyncThing to
-# replicate the same DATA_DIR across nodes consistently).
-
-CMD ["npm", "start"]
-```
-
-### 3. Example docker-compose.yml (single node)
-
-```yaml
-# docker-compose.yml — deploy to every server that runs OnlineWiki + SyncThing
-services:
-  onlinewiki:
-    build: .
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    env_file:
-      - .env
-    volumes:
-      # ★ PERSISTENT STORAGE — map the container's DATA_DIR to an EXTERNAL location.
-      # Use a NAMED VOLUME for a single server; for multi-server SyncThing replication,
-      # use a HOST BIND-MOUNT (see below) so the host-side SyncThing daemon can read it.
-      - onlinewiki_data:/var/lib/onlinewiki
-      # Optional: mount logs out if you want them on the host for log collectors
-      - onlinewiki_logs:/var/log/onlinewiki
-
-volumes:
-  onlinewiki_data:     # OR replace with a bind mount: /data/onlinewiki:/var/lib/onlinewiki
-  onlinewiki_logs:
-```
-
-### 4. Multi-server SyncThing replication (Docker)
-
-For a load-balanced, multi-server deployment with SyncThing-replicated DATA_DIR:
-
-1. **On every server**, create a host directory that SyncThing will replicate, and map it as a **bind-mount** (not a named Docker volume):
-
-```yaml
-# docker-compose.yml — multi-server variant, SAME on every node
-services:
-  onlinewiki:
-    build: .
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    env_file:
-      - .env
-    volumes:
-      # ★ HOST BIND-MOUNT: SyncThing on the host replicates this directory.
-      # The container-side path /var/lib/onlinewiki stays identical on every server,
-      # which keeps env configs identical across nodes.
-      - /data/onlinewiki:/var/lib/onlinewiki
-      - /var/log/onlinewiki:/var/log/onlinewiki
-```
-
-2. **Start the stack on every node:**
-   ```bash
-   docker compose up -d --build
-   ```
-
-3. **Set up SyncThing (host or sibling container) to sync ONLY the DATA_DIR folder:**
-   - On every node, point SyncThing at the **host-side** directory (e.g. `/data/onlinewiki`).
-   - Copy **TEMPLATE B** (the DATA_DIR-only template) from [`.stignore`](file:///c:/Users/leeda/OneDrive/Dev/Trae/OnlineWiki/.stignore#L30-L65) into `<host-DATA_DIR>/.stignore` (e.g. `/data/onlinewiki/.stignore`).
-   - This is the **default/recommended** template. It ignores transient `sessions/*.tmp`, `sessions/*.lock`, and any stray `logs/`; everything else (pages, uploads, avatars, `sessions/*.json`, `users.json`, `settings.json`) is replicated.
-
-4. **Enable sticky sessions** on your load balancer (same rules as bare-metal — see the Multi-Server section below).
-
-5. **Run ONE global session reaper** across the cluster (exactly one scheduled task, hitting any node's `POST /api/maintenance/expire-sessions` with `MAINTENANCE_TOKEN`).
-
----
-
-## Alternative: Bare-metal / Local Dev Setup (npm start)
-
-Use this for single-server installs or local development on a Windows / Linux machine with Node.js installed.
-
-### 1. Copy environment file
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Open `.env` and fill in your Active Directory details. For bare-metal you can keep `DATA_DIR=data` (inside the repo) or point it at a mapped drive / UNC:
-
-```env
-# For bare-metal you can keep these defaults or switch to absolute paths:
-DATA_DIR=data
-LOG_DIR=logs
-
-SESSION_SECRET=<generate with: node -e "console.log(require('crypto').randomBytes(48).toString('hex'))">
-
-LDAP_URL=ldap://your-domain-controller.example.com
-LDAP_BIND_DN=cn=svc-wiki,ou=ServiceAccounts,dc=example,dc=com
-LDAP_BIND_PASSWORD=your-service-account-password
-LDAP_BASE_DN=dc=example,dc=com
-```
-
-> **Tip:** Set `LDAP_TLS_REJECT_UNAUTHORIZED=false` in `.env` if your domain controller uses a self-signed certificate.
-
-### 2. Install dependencies
-
-```powershell
-npm install
-```
-
-### 3. Start the server
-
-```powershell
-# Production
-npm start
-
-# Development (auto-restart on file changes)
-npm run dev
-```
-
-The wiki will be available at **http://localhost:3000** (or the `PORT` from `.env`).
-
----
-
-## Project Structure
-
-```
-OnlineWiki/                             ← application code (ships inside Docker image; NOT synced by SyncThing)
-├── server.js           — Express app, routes, LDAP auth
-├── .env                — Your configuration (never commit this; passed to container via --env-file)
-├── .env.example        — Config template (Docker-friendly defaults: DATA_DIR=/var/lib/onlinewiki)
-├── views/
-│   ├── layout.ejs      — Shared shell (sidebar, topbar)
-│   ├── login.ejs       — AD login form
-│   ├── home.ejs        — Page list with search
-│   ├── page.ejs        — Page reader
-│   ├── edit.ejs        — TinyMCE editor
-│   ├── uploads.ejs     — Document manager
-│   └── error.ejs       — Error pages
-├── public/
-│   ├── css/style.css   — Premium dark-mode CSS
-│   └── js/
-│       ├── app.js      — Sidebar, search, shared UI
-│       └── editor.js   — TinyMCE init + slug + attachment picker
-├── lib/
-│   └── logger.js       — Winston logger setup (reads LOG_DIR env)
-├── test_files/         — Local test fixtures / scratch data (never commit or sync)
-│
-├── <DATA_DIR>/         — ★ Consolidated persistent storage — the ONLY folder SyncThing replicates
-│   │                      Docker default: /var/lib/onlinewiki (mounted as external volume).
-│   │                      Bare-metal default: data/ (relative inside repo).
-│   ├── pages/          — Wiki pages stored as .json files
-│   ├── uploads/        — Uploaded documents
-│   ├── avatars/        — User profile avatars (circular PNGs)
-│   ├── sessions/       — Session JSON files (SESSION_MODE=syncthing shares these)
-│   ├── users.json      — Local user registry + roles + password hashes
-│   └── settings.json   — Site title / tagline / home heading
-│
-└── <LOG_DIR>/          — Per-instance logs (do NOT sync; LOG_DIR env)
-                          Docker default: /var/log/onlinewiki.
-                          Bare-metal default: logs/ (inside repo).
-```
-
-`<DATA_DIR>` is controlled by the `DATA_DIR` env var:
-
-| Environment | Default value | How it is provisioned |
+| # | Principle | Why it matters |
 |---|---|---|
-| **Docker (production)** | `/var/lib/onlinewiki` | Mounted as a **bind-mount** (SyncThing multi-server) or **named volume** (single server) from outside the container |
-| Bare-metal / local dev | `data` (relative) | Created inside the repo; can be overridden to `X:\OnlineWiki-Data`, `\\filer.corp\wiki$`, or `/srv/onlinewiki-data` |
+| 1 | **Single storage root** (`DATA_DIR`) | One replication target → no missing pieces, dead-simple DR |
+| 2 | **Flat files, no database** | Pages/users/settings are JSON files — readable offline, no DB admin, portable backups |
+| 3 | **Application code ≠ state** | Code lives in the Docker image; SyncThing only replicates `DATA_DIR` (re-imaging never destroys data) |
+| 4 | **Optional session sharing** (`SESSION_MODE`) | Three strategies: single-server, SyncThing-file-sync, or Redis — pick the one that matches your infra |
+| 5 | **Layered idle-time enforcement** | Idle sessions don't linger on shared kiosks; rolling cookie + client-side monitor + pre-expiry warning |
+| 6 | **Conflict awareness, not avoidance** | Concurrent page edits are detected, user is warned, and SyncThing keeps the losing save as a `*.sync-conflict-*` copy (app filters it out of listings) |
 
-`LOG_DIR` is separate (default `/var/log/onlinewiki` in Docker, `logs` in bare-metal) and must **never** be replicated between servers.
+### Top-Level Component Map
 
----
+```
+                     ┌──────────────────────────────┐
+                     │      DNS / Load Balancer     │
+                     │   ⚠ requires STICKY SESSIONS │  ← cookie or source-IP affinity
+                     └──────────────┬───────────────┘
+                ┌───────────────────┴───────────────────┐
+                ▼                                       ▼
+      ┌─ OnlineWiki Node A ────────────┐    ┌─ OnlineWiki Node B ────────────┐
+      │  ┌─────────────────────────┐   │    │  ┌─────────────────────────┐   │
+      │  │  Node.js runtime        │   │    │  │  Node.js runtime        │   │
+      │  │  server.js (Express)    │   │    │  │  server.js (Express)    │   │
+      │  │   · routes & auth       │   │    │  │   · routes & auth       │   │
+      │  │   · flat-file I/O       │   │    │  │   · flat-file I/O       │   │
+      │  │   · EJS templating      │   │    │  │   · EJS templating      │   │
+      │  │   · TinyMCE + client JS │   │    │  │   · TinyMCE + client JS │   │
+      │  └────┬────────────────┬───┘   │    │  └────┬────────────────┬───┘   │
+      │       ▼ bind-mount     ▼       │    │       ▼ bind-mount     ▼       │
+      │  ┌────────────┐  ┌──────────┐ │    │  ┌────────────┐  ┌──────────┐ │
+      │  │  DATA_DIR  │  │ LOG_DIR  │ │    │  │  DATA_DIR  │  │ LOG_DIR  │ │
+      │  │ (same data │  │ (per-node│ │    │  │ (same data │  │ (per-node│ │
+      │  │  on every  │  │  logs,   │ │    │  │  on every  │  │  logs,   │ │
+      │  │   server)  │  │  private)│ │    │  │   server)  │  │  private)│ │
+      │  └─────┬──────┘  └──────────┘ │    │  └─────┬──────┘  └──────────┘ │
+      └────────┼───────────────────────┘    └────────┼───────────────────────┘
+               ▼                                      ▼
+        ┌──── SyncThing directory replicator ─────┐   ← ONE FOLDER: DATA_DIR
+        │  syncs:  pages/, uploads/, avatars/,    │          TEMPLATE B
+        │         sessions/*.json, users.json,    │          .stignore at
+        │         settings.json                   │          DATA_DIR/.stignore
+        │  ignores: sessions/*.tmp, *.lock, logs/ │
+        └─────────────────────────────────────────┘
+```
 
-## Page Storage Format
+> **Bare-metal variant (no containers):** Replace the Node.js container box with a
+> plain `node server.js` systemd / SCM service running directly on the host, and
+> `DATA_DIR` becomes a local path (`data/`, `X:\OnlineWiki-Data`, …).  Everything
+> else in the diagram stays identical.
 
-Each page is stored as `<DATA_DIR>/pages/<slug>.json`:
+### Single-Root Directory Layout (`DATA_DIR` + `LOG_DIR`)
+
+```
+OnlineWiki/                              ← application code (ships in the Docker image;
+                                          never synced between nodes)
+├── server.js            Express routes, LDAP auth, session layer
+├── .env                 Per-node configuration (never commit, never sync)
+├── .env.example         Template with production-safe defaults
+├── views/               EJS templates (layout, login, home, page, edit, uploads, error)
+├── public/
+│   ├── css/style.css    UI theme (dark, glassmorphism)
+│   └── js/
+│       ├── app.js       Sidebar, live search, session idle monitor, attachment picker
+│       └── editor.js    TinyMCE init, slug auto-generation, save-btn guard logic
+├── lib/logger.js        Winston (daily rotate, reads LOG_DIR from env)
+├── test_files/          Local scratch data (NEVER commit / NEVER sync)
+│
+├── <DATA_DIR>/          ★  Consolidated persistent root — the ONE folder SyncThing
+│   │                      replicates.  Exactly one of:
+│   │                         Docker (default):  /var/lib/onlinewiki
+│   │                         Bare-metal (rel):  data/
+│   │                         Bare-metal (abs):  X:\OnlineWiki-Data  /srv/onlinewiki-data
+│   ├── pages/           Each page is one JSON file:  <slug>.json
+│   ├── uploads/         Binary document uploads + image uploads
+│   ├── avatars/         Per-user profile pictures (circular PNG/JPG)
+│   ├── sessions/        Session files (only *.json are synced; *.tmp / *.lock ignored)
+│   ├── users.json       Local user registry + role map + bcrypt hashes
+│   └── settings.json    Site title, tagline, home heading, registration policy
+│
+└── <LOG_DIR>/           Per-instance logs — NEVER replicate between servers
+                          Docker:  /var/log/onlinewiki
+                          Bare:    logs/  (inside repo, or D:\Logs\WikiA etc.)
+                          Contents:  combined-<date>.log  +  audit-<date>.log
+```
+
+Environment mapping:
+
+| Variable | Docker default | Sync? | Notes |
+|---|---|---|---|
+| `DATA_DIR` | `/var/lib/onlinewiki` | ✅ YES, via TEMPLATE B | Same *container-side* value on every server; host bind-mount source can differ |
+| `LOG_DIR` | `/var/log/onlinewiki` | ❌ NO | Per-instance diagnostics; deliberately not replicated |
+
+### Multi-Server Architecture Diagram (Detailed)
+
+```
+                         ┌─────────────────────────────┐
+                         │     DNS / Load Balancer     │
+                         │   ⚠ STICKY SESSIONS REQUIRED│   cookie or source-IP affinity
+                         └──────────────┬──────────────┘
+                    ┌───────────────────┴───────────────────┐
+                    ▼                                       ▼
+    ┌── Server A (Office 1) ────────────────────┐  ┌── Server B (Office 2) ────────────────────┐
+    │                                            │  │                                            │
+    │  ┌─ Docker container ──────────────────┐  │  │  ┌─ Docker container ──────────────────┐  │
+    │  │  · node server.js                   │  │  │  │  · node server.js                   │  │
+    │  │  · Express + Passport (LDAP/local)  │  │  │  │  · Express + Passport (LDAP/local)  │  │
+    │  │  · DATA_DIR = /var/lib/onlinewiki   │  │  │  │  · DATA_DIR = /var/lib/onlinewiki   │  │   SAME on both
+    │  │  · LOG_DIR  = /var/log/onlinewiki   │  │  │  │  · LOG_DIR  = /var/log/onlinewiki   │  │
+    │  └──────┬──────────────────┬───────────┘  │  │  └──────┬──────────────────┬───────────┘  │
+    │         ▼ bind-mount       ▼ bind-mount    │  │         ▼ bind-mount       ▼ bind-mount    │
+    │  ┌────────────────┐  ┌──────────────────┐  │  │  ┌────────────────┐  ┌──────────────────┐  │
+    │  │ HOST DATA_DIR  │  │ HOST LOG_DIR     │  │  │  │ HOST DATA_DIR  │  │ HOST LOG_DIR     │  │   LOG_DIRs DIFFER
+    │  │ /data/onlinewiki│  │ /var/log/ow     │  │  │  │ /data/onlinewiki│  │ /var/log/ow     │  │
+    │  └──────┬─────────┘  └──────────────────┘  │  │  └──────┬─────────┘  └──────────────────┘  │
+    │         │                                  │  │         │                                  │
+    │         │ pages/      ──── SYNCED ────→    │  │         │ pages/                          │
+    │         │ uploads/    ──── SYNCED ────→    │  │         │ uploads/                        │
+    │         │ avatars/    ──── SYNCED ────→    │  │         │ avatars/                        │
+    │         │ users.json  ──── SYNCED ────→    │  │         │ users.json                      │
+    │         │ settings.json─── SYNCED ────→    │  │         │ settings.json                   │
+    │         │ sessions/*.json ── SYNCED ──→    │  │         │ sessions/*.json                 │   SESSIONS SHARED
+    │         │                                  │  │         │                                  │
+    │  reaper: DISABLED                          │  │  reaper: HOURLY                         │   EXACTLY ONE reaper
+    │  (all built-in reapers disabled when       │  │  via POST /api/maintenance/expire-       │   task across the
+    │   SESSION_MODE=syncthing)                  │  │      sessions with MAINTENANCE_TOKEN     │   whole cluster
+    └──────────────┬─────────────────────────────┘  └──────────────┬─────────────────────────────┘
+                   ▼                                               ▼
+                ┌─ SyncThing directory replicator (SINGLE FOLDER: the HOST DATA_DIR, e.g. /data/onlinewiki) ─┐
+                │  · Syncs:  pages/, uploads/, avatars/, sessions/*.json, users.json, settings.json           │
+                │  · Ignores (TEMPLATE B in .stignore, copied INTO DATA_DIR root):                              │
+                │       sessions/*.tmp, sessions/*.tmp.*, sessions/*.lock, logs/, *.log,                       │
+                │       .stfolder/, .stversions/, .DS_Store, Thumbs.db                                         │
+                │  · Application code lives inside the Docker image — never synced by SyncThing                 │
+                └──────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Session Sharing: Three Modes
+
+Choose exactly one in `.env` and set it identically on every node:
+
+| Mode | `SESSION_MODE` | Sharing mechanism | Reaper strategy |
+|---|---|---|---|
+| Single server (default) | `single` | In-memory + DATA_DIR disk — isolated per node | Built-in, hourly per node |
+| **SyncThing (recommended for LB + ST)** | `syncthing` | `<DATA_DIR>/sessions/*.json` replicated by SyncThing | **Exactly one server** runs `POST /api/maintenance/expire-sessions` hourly (Scheduled Task / cron) |
+| Redis | `redis` | Central Redis store | Native TTL on keys; no reaper needed |
+
+All three modes require an **identical** `SESSION_SECRET` across the cluster, otherwise signed cookies cannot be validated on other nodes.
+
+### Conflict Handling Matrix
+
+| Scenario | Outcome |
+|---|---|
+| Two users edit **different** pages on two servers | ✅ No conflict — two independent JSON files |
+| Two users edit the **same** page on two servers | ⚠ Last write wins; second saver shown conflict banner; SyncThing writes the loser to `<slug>.sync-conflict-<ts>-<devId>.json` |
+| `*.sync-conflict-*` files appear in `<DATA_DIR>/pages/` | ✅ App silently filters them out of `listPages()`; visible only for manual recovery |
+| `*.sync-conflict-*` files appear in `<DATA_DIR>/sessions/` | ⚠ Diagnostic: sticky sessions misconfigured at LB.  Keep the most-recently-written copy, delete the conflict. |
+| File uploaded on Server A | ✅ SyncThing carries it to all other nodes in ~seconds |
+| Pinned Server A dies mid-session | ✅ LB rebalances user to Server B; replicated session JSON keeps them authenticated without re-login |
+| User role / displayName change on pinned server | ✅ Session JSON re-written; SyncThing propagates to peers; no re-login |
+
+### Session Idle-Time Enforcement (Layered Model)
+
+Abandoned sessions on shared kiosk-style machines are cleaned up via three cooperative layers:
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│  LAYER 1 · Server-side hard ceiling (rolling cookie)                       │
+│  SESSION_MAX_AGE_HOURS=8 (default)                                         │
+│  Absolute upper bound — session expires 8 h from the FIRST login,          │
+│  even with continuous use.  Every authenticated HTTP request re-issues     │
+│  the cookie with a fresh Max-Age (rolling:true), extending this ceiling    │
+│  up to the limit from the LAST activity.                                   │
+├────────────────────────────────────────────────────────────────────────────┤
+│  LAYER 2 · Client-side human-activity monitor                              │
+│  SESSION_IDLE_MINUTES=15 (default)                                         │
+│  Listens only for HUMAN input: keypress, mousedown / move / click,         │
+│  scroll, touch, pointer, wheel, drag.  Asset fetches, keepalive polls,    │
+│  and background XHRs do NOT reset the idle timer.                          │
+├────────────────────────────────────────────────────────────────────────────┤
+│  LAYER 3 · Pre-expiry warning with live countdown                          │
+│  SESSION_IDLE_WARN_SECONDS=120 (default)                                   │
+│  N seconds before Layer 2 fires, accessible `<div role=alertdialog>` pops  │
+│  up with a countdown chip + two buttons:                                   │
+│    [Extend session]  →  GET /api/session/keepalive → 204 No Content        │
+│                           resets both client idle timer AND the rolling     │
+│                           server-side cookie; closes the modal             │
+│    [Log out now]     →  POST /logout  (CSRF-safe form)                     │
+│  Countdown chip turns red when ≤ 30 s remain; ESC ≡ [Log out now].         │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+**User-visible flow:**
+
+```
+ User active  ──►  (nothing)
+     │
+     ▼  idle for (SESSION_IDLE_MINUTES × 60) − SESSION_IDLE_WARN_SECONDS  sec
+ Warning dialog with countdown appears
+     │
+     ├─ [Extend session] clicked  ─► keepalive 204  ─► cookie + idle reset
+     │
+     ├─ Any HUMAN input (key / mouse / scroll / …)  ─► idle reset + dismiss
+     │
+     ├─ [Log out now] clicked  ─► POST /logout  ─►  /login  (manual)
+     │
+     ▼  Countdown reaches 0
+  Auto  POST /logout?reason=inactive
+     │
+     ▼  /login?reason=inactive — friendly banner:
+        "You were signed out automatically because you were inactive.
+         Sign back in to continue."
+```
+
+To disable idle enforcement entirely (air-gapped intranets with no shared kiosks),
+set **either** variable to zero or break the inequality:
+
+```env
+SESSION_IDLE_MINUTES=0
+# or
+SESSION_IDLE_WARN_SECONDS=0
+# or
+SESSION_IDLE_WARN_SECONDS >= SESSION_IDLE_MINUTES * 60
+```
+
+Every logout (manual or idle) writes a `USER_LOGOUT` event to the per-day audit log
+`<LOG_DIR>/audit-YYYY-MM-DD.log` with a `reason` of `"manual"` or `"inactive"`.
+
+### Page Storage Wire Format
+
+Each page is exactly one file: `<DATA_DIR>/pages/<slug>.json`
 
 ```json
 {
   "title": "Getting Started",
   "slug": "getting-started",
-  "content": "<p>HTML content from TinyMCE...</p>",
+  "content": "<p>HTML from the TinyMCE editor…</p>",
   "tags": ["setup", "onboarding"],
   "author": "jdoe",
   "authorDisplay": "Jane Doe",
@@ -260,119 +290,183 @@ Each page is stored as `<DATA_DIR>/pages/<slug>.json`:
 
 ---
 
-## Uploading Documents
+<!-- ═══════════════════════════════════════════════════════════════════════
+     DEPLOYMENT  ·  Docker (Recommended for Production)
+     ═══════════════════════════════════════════════════════════════════════ -->
 
-1. Go to **Documents** in the sidebar
-2. Drag & drop or click **Choose File** — supported types: PDF, Word, Excel, PowerPoint, images, ZIP, CSV (max 50 MB)
-3. To attach a file to a page, open the page editor and click **Add from Uploads** in the sidebar panel
-4. On the page view, attachments appear as download buttons — files must be downloaded to open
+## ★ Docker Deployment (Recommended for Production)
 
----
+### 1. Prepare the environment file
 
-## LDAP Troubleshooting
-
-| Symptom | Fix |
-|---|---|
-| "Authentication error" on login | Check `LDAP_URL` and `LDAP_BIND_DN`/`LDAP_BIND_PASSWORD` |
-| Certificate errors | Set `LDAP_TLS_REJECT_UNAUTHORIZED=false` |
-| Wrong users found | Adjust `LDAP_SEARCH_FILTER` (default: `sAMAccountName`) |
-| `ldap://` vs `ldaps://` | Use `ldaps://` for port 636 (secure LDAP) |
-
-Check the console output for `[LDAP]` error lines when debugging auth issues.
-
----
-
-## Multi-Server Deployment with SyncThing
-
-The wiki is designed to run on multiple servers simultaneously. **All persistent state lives inside a single configurable root folder, DATA_DIR** — point SyncThing at **THIS ONE FOLDER** on every server, and **nothing else** needs syncing. This is the default architecture. In Docker deployments, DATA_DIR is a persistent volume mounted from outside the container; in bare-metal deployments it can be a mapped drive, UNC share, or local path.
-
-Sessions, pages, uploads, avatars, the user registry, and site settings all live inside DATA_DIR, so load-balanced users never need to re-login when the LB picks a different server.
-
-Two env vars control storage layout. Configure them on **every** node (identical DATA_DIR, LOG_DIR can differ per server):
-
-| Variable | Default (Docker / prod) | Sync? | Example values |
-|---|---|---|---|
-| `DATA_DIR` | `/var/lib/onlinewiki` | ✅ **YES — single SyncThing root (TEMPLATE B, default)** | `/var/lib/onlinewiki` (Docker bind-mount), `/data/onlinewiki` (Linux host), `X:\OnlineWiki-Data`, `\\filer.corp\wiki$`, `data` (legacy bare-metal inside repo) |
-| `LOG_DIR` | `/var/log/onlinewiki` | ❌ NO — per-instance diagnostics | `/var/log/onlinewiki`, `/var/log/onlinewiki-a`, `D:\Logs\WikiA`, `logs` (legacy) |
-
-On startup the banner prints both absolute paths — so you can verify at a glance that the nodes point at the right storage:
-
-```
-# Docker node:
-Persistent data (DATA_DIR=/var/lib/onlinewiki): /var/lib/onlinewiki
-Local logs        (LOG_DIR =/var/log/onlinewiki):  /var/log/onlinewiki
-
-# Bare-metal node (legacy):
-Persistent data (DATA_DIR=X:\OnlineWiki-Data):  X:\OnlineWiki-Data
-Local logs        (LOG_DIR =D:\Logs\WikiA):      D:\Logs\WikiA
+```powershell
+Copy-Item .env.example .env
 ```
 
-### Architecture overview
+Open `.env` and fill in the required values. The defaults in `.env.example` are already tuned for Docker:
 
-```
-                      ┌──────────────────────┐
-                      │  DNS / Load Balancer │
-                      │  ⚠ STICKY SESSIONS   │  ← affinity: client IP or cookie
-                      └──────────┬───────────┘
-                 ┌───────────────┴───────────────┐
-                 ▼                               ▼
-  Server A (Office 1)                    Server B (Office 2)
-  ┌────────────────────────────────────────┐  ┌────────────────────────────────────────┐
-  │  ┌─ Docker container ──────────────┐    │  │  ┌─ Docker container ──────────────┐    │
-  │  │  node server.js              │    │  │  │  node server.js              │    │
-  │  │  DATA_DIR=/var/lib/onlinewiki  │    │  │  │  DATA_DIR=/var/lib/onlinewiki  │    │  ← SAME container-side value
-  │  │  LOG_DIR =/var/log/onlinewiki│    │  │  │  LOG_DIR =/var/log/onlinewiki│    │
-  │  └───────┬──────────────────┬───────┘    │  │  └───────┬──────────────────┬───────┘    │
-  │          ↕ bind-mount    ↕ bind-mount   │  │          ↕ bind-mount    ↕ bind-mount   │
-  │  ┌───────▼──────────┐ ┌───▼───────────┐  │  │  ┌───────▼──────────┐ ┌───▼───────────┐  │
-  │  │  HOST DATA_DIR   │ │  HOST LOG_DIR │  │  │  │  HOST DATA_DIR   │ │  HOST LOG_DIR │  │  ← LOG_DIRs are DIFFERENT
-  │  │  /data/onlinewiki │ │ /var/log/ow  │  │  │  │  /data/onlinewiki │ │ /var/log/ow  │  │
-  │  │                  │ │               │  │  │  │                  │ │               │  │
-  │  │  pages/       ←────┼─┼───────────────┼──┼──┼─→  pages/          │ │               │  │
-  │  │  uploads/     ←────┼─┼───────────────┼──┼──┼─→  uploads/        │ │               │  │
-  │  │  avatars/     ←────┼───────────────┼──┼──┼─→  avatars/        │ │               │  │
-  │  │  users.json   ←────┼─┼───────────────┼──┼──┼─→  users.json      │ │               │  │
-  │  │  settings.json←────┼───────────────┼──┼──┼─→  settings.json   │ │               │  │
-  │  │  sessions/*.json ←────┼───────────────┼──┼──┼─→  sessions/*.json │ │               │  │  ← SESSIONS SYNCED
-  │  │                  │ │               │  │  │  │                  │ │               │  │
-  │  │  reaper cron: OFF │ │               │  │  │  │  reaper cron: HOURLY│ │               │  │  ← EXACTLY ONE scheduled task
-  │  └───────────────────┘ └───────────────┘  │  │  └───────────────────┘ └───────────────┘  │
-  └──────────────┬────────────────────────────┘  └──────────────┬────────────────────────────┘
-         ↕ SyncThing                                          ↕ SyncThing
-   (SINGLE FOLDER: the HOST DATA_DIR  —  e.g. /data/onlinewiki
-    Ignores sessions/*.tmp, sessions/*.lock via TEMPLATE B
-    .stignore copied INTO the DATA_DIR folder root.
-    Application code lives inside the Docker image — never synced by SyncThing.)
+```env
+# ── Docker-mounted persistent storage
+DATA_DIR=/var/lib/onlinewiki   # Container-side path — mount a host dir / named volume here
+LOG_DIR=/var/log/onlinewiki    # Optional second volume for logs
+
+# ── Session sharing across containers (identical on every node)
+SESSION_SECRET=<generate: node -e "console.log(require('crypto').randomBytes(48).toString('hex'))">
+SESSION_MODE=syncthing         # Sessions replicated by SyncThing through the shared DATA_DIR
+MAINTENANCE_TOKEN=<generate:   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))">
+
+# ── LDAP / Active Directory
+LDAP_URL=ldap://your-domain-controller.example.com
+LDAP_BIND_DN=cn=svc-wiki,ou=ServiceAccounts,dc=example,dc=com
+LDAP_BIND_PASSWORD=your-service-account-password
+LDAP_BASE_DN=dc=example,dc=com
 ```
 
-> **Bare-metal (legacy in-place variant): replace the Docker container layers with a plain `node server.js` process running directly on the host; DATA_DIR points directly to `X:\OnlineWiki-Data` or relative `data/`.
+> **Tip:** Set `LDAP_TLS_REJECT_UNAUTHORIZED=false` in `.env` if your DC uses a self-signed certificate.
 
-### Three session modes — pick one
+### 2. Example Dockerfile
 
-Set `SESSION_MODE=` in `.env` on **every** server:
+```dockerfile
+# Dockerfile for OnlineWiki
+FROM node:20-bookworm-slim
 
-| Mode | `SESSION_MODE` | Sharing mechanism | Reaper strategy |
-|---|---|---|---|
-| Single server (default) | `single` | None — each server's DATA_DIR/sessions disk only | Built-in, hourly per node |
-| **SyncThing (recommended for your LB + ST setup)** | `syncthing` | `<DATA_DIR>/sessions/*.json` replicated by SyncThing | **ONE server only** runs `POST /api/maintenance/expire-sessions` hourly via Scheduled Task/cron |
-| Redis | `redis` | Redis server | Redis native TTL, no reaper needed |
+WORKDIR /app
 
-All three modes keep identical `SESSION_SECRET` on every server — otherwise signed cookies can't be validated cross-instance.
+# Install deps first — better layer caching
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
----
+# Copy the rest of the application code
+COPY . .
 
-### Setup for SyncThing session sharing (SESSION_MODE=syncthing)
+EXPOSE 3000
 
-**1. Deploy the application to every server**
+# ⚠ Do NOT declare a VOLUME here — declare them in docker-compose.yml or with
+# `docker run -v` so you control the host-side path (SyncThing needs this to
+# replicate the same DATA_DIR across nodes consistently).
 
-Choose **ONE** deployment path (Docker is recommended):
+CMD ["npm", "start"]
+```
+
+### 3. docker-compose.yml — Single node
 
 ```yaml
-# ★ DOCKER (recommended) — repeat on every server:
-#   1. Copy the project / Dockerfile + docker-compose.yml onto each server
-#   2. Prepare the persistent host directories for SyncThing to replicate:
-#        mkdir -p /data/onlinewiki /var/log/onlinewiki
-#   3. docker compose up -d --build
+# docker-compose.yml  ·  deploy to every server running OnlineWiki + SyncThing
+services:
+  onlinewiki:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      # ★ PERSISTENT STORAGE — map container DATA_DIR to an EXTERNAL location.
+      # Use a NAMED VOLUME for a single server; use a HOST BIND-MOUNT for
+      # multi-server SyncThing (so the host SyncThing daemon can read it).
+      - onlinewiki_data:/var/lib/onlinewiki
+      # Optional: logs on the host for collectors
+      - onlinewiki_logs:/var/log/onlinewiki
+
+volumes:
+  onlinewiki_data:   # replace with bind mount if needed: /data/onlinewiki:/var/lib/onlinewiki
+  onlinewiki_logs:
+```
+
+### 4. docker-compose.yml — Multi-server SyncThing variant
+
+```yaml
+# docker-compose.yml · multi-server — SAME file on every node
+services:
+  onlinewiki:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      # ★ HOST BIND-MOUNT — SyncThing on the host replicates this directory.
+      # Container-side /var/lib/onlinewiki is identical on every server, so
+      # env configs stay identical.
+      - /data/onlinewiki:/var/lib/onlinewiki
+      - /var/log/onlinewiki:/var/log/onlinewiki
+```
+
+**Start the stack on every node:**
+```bash
+docker compose up -d --build
+```
+
+**Set up SyncThing (host or sidecar container):**
+- On every node, point SyncThing at the **host-side** directory (e.g. `/data/onlinewiki`).
+- Copy **TEMPLATE B** (the `DATA_DIR`-only `.stignore`) from [`.stignore`](file:///c:/Users/leeda/OneDrive/Dev/Trae/OnlineWiki/.stignore#L30-L65) and drop it into `<host-DATA_DIR>/.stignore` (e.g. `/data/onlinewiki/.stignore`).  This is the **default / recommended** template.  It ignores transient `sessions/*.tmp`, `sessions/*.lock`, and stray `logs/`; everything else (pages, uploads, avatars, `sessions/*.json`, `users.json`, `settings.json`) is replicated.
+- Enable **sticky sessions** on your load balancer (cookie or source-IP affinity).
+- Schedule **exactly one** global session reaper across the cluster: a single hourly hit on any node's `POST /api/maintenance/expire-sessions` with the `MAINTENANCE_TOKEN`.
+
+---
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     DEPLOYMENT  ·  Bare-metal / Local Dev (npm start)
+     ═══════════════════════════════════════════════════════════════════════ -->
+
+## Alternative: Bare-metal / Local Dev Setup (npm start)
+
+Use this for single-server installs or local dev on Windows/Linux/macOS with Node installed.
+
+### 1. Copy the environment file
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Open `.env` and fill in your AD details.  For bare-metal you can keep `DATA_DIR=data` (inside the repo) or point it at a mapped drive / UNC:
+
+```env
+DATA_DIR=data
+LOG_DIR=logs
+
+SESSION_SECRET=<generate with: node -e "console.log(require('crypto').randomBytes(48).toString('hex'))">
+
+LDAP_URL=ldap://your-domain-controller.example.com
+LDAP_BIND_DN=cn=svc-wiki,ou=ServiceAccounts,dc=example,dc=com
+LDAP_BIND_PASSWORD=your-service-account-password
+LDAP_BASE_DN=dc=example,dc=com
+```
+
+> **Tip:** `LDAP_TLS_REJECT_UNAUTHORIZED=false` for DCs with self-signed certificates.
+
+### 2. Install dependencies
+
+```powershell
+npm install
+```
+
+### 3. Start the server
+
+```powershell
+npm start          # production
+npm run dev        # development (auto-reload via nodemon)
+```
+
+Wiki is available at **http://localhost:3000** (or the `PORT` from `.env`).
+
+---
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     DEPLOYMENT  ·  SyncThing session-sharing step-by-step
+     (SESSION_MODE=syncthing)
+     ═══════════════════════════════════════════════════════════════════════ -->
+
+## SyncThing Session Sharing (Step-by-Step)
+
+Assumes `SESSION_MODE=syncthing`.  Use Docker (recommended) or bare-metal — the
+SyncThing setup steps are identical; only the host-side DATA_DIR path changes.
+
+### 1. Deploy the app to every server
+
+**DOCKER (recommended):**
+```yaml
+# docker-compose.yml — every server
 services:
   onlinewiki:
     build: .
@@ -380,252 +474,175 @@ services:
     ports: ["3000:3000"]
     env_file: .env
     volumes:
-      - /data/onlinewiki:/var/lib/onlinewiki   # ★ HOST bind-mount → container DATA_DIR
+      - /data/onlinewiki:/var/lib/onlinewiki   # HOST bind-mount → container DATA_DIR
       - /var/log/onlinewiki:/var/log/onlinewiki # container LOG_DIR
 ```
-
-```powershell
-# Bare-metal (legacy / in-place) — repeat on every server:
-git clone <repo>  (or copy project folder)
-npm install                    # install deps locally — node_modules is NOT synced
-Copy-Item .env.example .env    # configure each server's .env independently
+```bash
+docker compose up -d --build
 ```
 
-**2. Configure `.env` identically on every server**
+**BARE-METAL (legacy in-place):**
+```powershell
+git clone <repo>  (or copy project folder)
+npm install                    # node_modules is NOT synced
+Copy-Item .env.example .env    # .env configured independently per server
+npm start
+```
 
-Set these shared values on **every** node. All of them are read from `.env` at startup; they are **not** read from DATA_DIR:
+### 2. Configure `.env` — identical shared values on every node
+
+All values below are read from `.env` at startup (NOT from `DATA_DIR`):
 
 ```env
-# ── Storage — the ONE folder SyncThing needs to replicate (★ Docker / prod defaults)
-DATA_DIR=/var/lib/onlinewiki            # SAME value on EVERY server (container-side path)
-LOG_DIR=/var/log/onlinewiki             # CAN be different per server, but keep it simple
+# Storage — the ONE folder SyncThing replicates (★ Docker / production defaults)
+DATA_DIR=/var/lib/onlinewiki            # SAME value on EVERY server (container path)
+LOG_DIR=/var/log/onlinewiki             # CAN differ per server
 
-# For bare-metal Windows deployments instead:
-# DATA_DIR=X:\OnlineWiki-Data           # SAME value on every server
+# Bare-metal Windows example instead:
+# DATA_DIR=X:\OnlineWiki-Data           # SAME on every server
 # LOG_DIR=D:\Logs\OnlineWikiA           # DIFFERENT per server
 
-# ── Session sharing — identical on EVERY server
-SESSION_SECRET=paste-the-SAME-64-char-hex-string-on-ALL-servers
+# Session sharing — identical on EVERY server
+SESSION_SECRET=<paste the SAME 48+ char hex string on ALL nodes>
 SESSION_MODE=syncthing
-MAINTENANCE_TOKEN=paste-a-long-random-bearer-token
+MAINTENANCE_TOKEN=<paste a long random bearer token>
 
 SESSION_MAX_AGE_HOURS=8
 PORT=3000                               # CAN differ per server
 LDAP_URL=ldap://your-domain-controller  # same AD / DC pool
 ```
 
-Generate secrets quickly:
+Secrets quick-generator:
 ```powershell
 node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"   # SESSION_SECRET
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"   # MAINTENANCE_TOKEN
 ```
 
-**3. Set up SyncThing share → ONE FOLDER (DATA_DIR) ★ DEFAULT / RECOMMENDED**
+### 3. Add one SyncThing folder → `DATA_DIR` (only!)
 
-SyncThing replicates **only the DATA_DIR persistent volume folder** — never the application code (code ships inside the Docker image or is deployed via git/robocopy independently).
+SyncThing replicates **only the `DATA_DIR` persistent volume folder** — never the
+application code (code ships inside the Docker image, or is deployed independently
+via git/robocopy).
 
-- On **every** server, open SyncThing and add a single "Folder" entry that points to the **host-side absolute path of DATA_DIR**:
-  - Docker Linux: `/data/onlinewiki` (the bind-mount source, not the container `/var/lib/onlinewiki` target)
-  - Bare-metal Windows: `X:\OnlineWiki-Data`
-  - Bare-metal Linux: `/srv/onlinewiki-data`
-- **Copy TEMPLATE B** (the DATA_DIR-only `.stignore`) from the project's [`.stignore`](file:///c:/Users/leeda/OneDrive/Dev/Trae/OnlineWiki/.stignore#L44-L64) and paste it as **`<DATA_DIR>/.stignore`** inside the shared folder. TEMPLATE B ignores:
-  - ❌ `sessions/*.tmp`, `sessions/*.tmp.*`, `sessions/*.lock` (transient atomic-write scratch)
-  - ❌ stray `logs/` or `*.log` files that might accidentally end up inside DATA_DIR
-  - ❌ `.stfolder/`, `.stversions/`, `.DS_Store`, `Thumbs.db` (SyncThing/OS metadata)
-- Contents that SyncThing must carry **and are NOT ignored**:
-  - ✅ `pages/`, `uploads/`, `avatars/`
-  - ✅ `users.json`, `settings.json`
-  - ✅ `sessions/*.json` (the final session files — not the tmp/lock scratch!)
+1. On **every** node, open SyncThing and add a single **Folder** that points to the **host-side** absolute path of `DATA_DIR`:
+   - Docker Linux: `/data/onlinewiki` (the bind-mount **source**, not the container `/var/lib/onlinewiki` target)
+   - Bare-metal Windows: `X:\OnlineWiki-Data`
+   - Bare-metal Linux: `/srv/onlinewiki-data`
+2. **Copy TEMPLATE B** (the `DATA_DIR`-only `.stignore`) from [`.stignore`](file:///c:/Users/leeda/OneDrive/Dev/Trae/OnlineWiki/.stignore#L44-L64) and paste it as **`<DATA_DIR>/.stignore`** inside the shared folder.
 
-> **Legacy / whole-repo share alternative (not recommended for Docker):** if you run bare-metal with DATA_DIR still at the relative `data/` inside the repo, you *can* share the entire project folder instead — use **TEMPLATE A** (further down in `.stignore`, already active in the repo-root copy) which additionally excludes `node_modules/`, `.env`, `logs/`, `test_files/`, and editor/OS cruft. For Docker deployments this approach is unnecessary because the code is baked into the image and never needs syncing.
+**TEMPLATE B ignores:**
+- ❌ `sessions/*.tmp`, `sessions/*.tmp.*`, `sessions/*.lock` (atomic-write scratch files)
+- ❌ Stray `logs/` or `*.log` accidentally dropped into `DATA_DIR`
+- ❌ `.stfolder/`, `.stversions/`, `.DS_Store`, `Thumbs.db` (SyncThing / OS metadata)
 
-**4. Enable STICKY SESSIONS on your load balancer**
+**TEMPLATE B syncs (must carry these):**
+- ✅ `pages/`, `uploads/`, `avatars/`
+- ✅ `users.json`, `settings.json`
+- ✅ `sessions/*.json` (the final session files — NOT the tmp / lock scratch!)
 
-This step is **required** for SyncThing-synced sessions to behave cleanly:
-- Without sticky sessions: every HTTP request could hit a different server, and the rolling `cookie.maxAge` extension re-writes the session JSON before SyncThing has time to replicate it — you'll see `.sync-conflict-…` files pile up inside `<DATA_DIR>/sessions/` and users get randomly logged out.
-- **With sticky sessions:** each user sticks to *one* server for ~8 hours (one `SESSION_MAX_AGE` window). SyncThing only needs to replicate the session file once at login, and again if the user's role/displayName changes. Failover to another server is still automatic if the pinned node dies — the replicated session JSON on Server B picks it up within SyncThing's normal ~few-second lag.
+> **Legacy whole-repo share (not recommended for Docker):** If you run bare-metal
+> with `DATA_DIR` still at the relative `data/` inside the repo, you *can* share
+> the entire project folder instead — use **TEMPLATE A** (further down in
+> `.stignore`, active in the repo-root copy) which additionally excludes
+> `node_modules/`, `.env`, `logs/`, `test_files/`, and editor/OS cruft.  In
+> Docker deployments this is unnecessary because the code is baked into the image.
 
-How to configure it:
-- **Kemp / F5 / IIS ARR / NetScaler:** use "source IP affinity" or "cookie-based persistence"
+### 4. Enable sticky sessions on the LB (REQUIRED for SESSION_MODE=syncthing)
+
+Without sticky sessions every HTTP request can land on a different server, and the
+rolling cookie re-writes the session JSON faster than SyncThing can replicate —
+`.sync-conflict-*` sessions pile up and users get randomly logged out.
+
+With sticky sessions: each user sticks to *one* server for roughly one
+`SESSION_MAX_AGE` window.  SyncThing only needs to replicate the session JSON
+once at login (+ once on role / displayName change).  Failover is still automatic
+if the pinned node dies — the replicated session JSON on the peer node picks the
+user up within SyncThing's normal few-second lag.
+
+Example LB configs:
+- **Kemp / F5 / IIS ARR / NetScaler:** source-IP affinity or cookie-based persistence
 - **HAProxy:** `stick-table type ip size 1m expire 8h store http_req_rate(10s)` + `stick on src`
-- **nginx:** `ip_hash;` directive in the `upstream { }` block, or the `sticky` module
+- **nginx:** `ip_hash;` (upstream) or the `sticky` module
 
-**5. Schedule the global session reaper (EXACTLY ONE scheduled task total across the cluster)**
+### 5. Schedule ONE global session reaper (cluster-wide)
 
-In `SESSION_MODE=syncthing` every server's built-in reaper is **disabled**. If each server deleted its own expired sessions, those deletes would race with SyncThing replication. Instead, run a single HTTP call, from **one** machine, hourly.
-
-On a nominated controller server (e.g. the same SyncThing "introducer", or any one app server) create a **Scheduled Task** that runs every 60 minutes and calls:
+With `SESSION_MODE=syncthing` every node's built-in hourly reaper is **disabled**
+(prevents delete-vs-delete races with SyncThing replication).  Instead, run a
+single HTTP POST, from **one** nominated machine, once per hour:
 
 ```powershell
-# Run-ExpireSessions.ps1 (or inline in Scheduled Task)
+# Schedule this in Task Scheduler / cron — EXACTLY ONE task total cluster-wide
 $token = "paste-MAINTENANCE_TOKEN-here"
 $uri   = "https://wiki.corp.yourdomain.com/api/maintenance/expire-sessions"
-Invoke-RestMethod -Uri $uri -Method Post -Headers @{ Authorization = "Bearer $token" } | Out-Null
+Invoke-RestMethod -Uri $uri -Method Post `
+    -Headers @{ Authorization = "Bearer $token" } | Out-Null
 ```
 
-If you want to run the reaper *via the web UI* instead (as an administrator), that also works — log in as an admin, send a POST with the page's `_csrf` token, and the same endpoint responds. The endpoint returns JSON:
+Admins may also POST through the web UI (using the page's `_csrf` token).  Endpoint
+returns:
 ```json
-{ "ok": true, "reason": "Reap cycle invoked via session-file-store.reap().", "mode": "syncthing", "reapable": true }
+{ "ok": true, "reason": "Reap cycle invoked via session-file-store.reap().",
+  "mode": "syncthing", "reapable": true }
 ```
 
-**6. Start the server on every node**
+### 6. Boot banner verification
 
-```bash
-# ★ Docker (recommended)
-docker compose up -d --build
-docker compose logs -f onlinewiki    # tail logs to confirm startup
-```
+Each node's boot log prints the storage paths + session mode so you can confirm at
+a glance that everything is wired consistently:
 
-```powershell
-# Bare-metal
-npm start
 ```
+Persistent data (DATA_DIR=/var/lib/onlinewiki): /var/lib/onlinewiki
+Local logs        (LOG_DIR =/var/log/onlinewiki):  /var/log/onlinewiki
 
-Each server's boot log prints its session mode — you want to see exactly:
-```
 info: [session] mode=syncthing — <DATA_DIR>/sessions/ MUST be synced by SyncThing,
       built-in reaper is DISABLED (reap once globally via POST /api/maintenance/expire-sessions
       from ONE nominated server). Also ensure your load balancer enables STICKY SESSIONS
       (source-IP affinity or cookie) to minimise session-file race writes during SyncThing lag.
 ```
-Plus the banner always prints the canonical DATA_DIR + LOG_DIR so you can confirm both nodes point to the same share:
-```
-# Docker:
-Persistent data (DATA_DIR=/var/lib/onlinewiki): /var/lib/onlinewiki
-Local logs        (LOG_DIR =/var/log/onlinewiki):  /var/log/onlinewiki
-
-# Bare-metal Windows:
-Persistent data (DATA_DIR=X:\OnlineWiki-Data):  X:\OnlineWiki-Data
-Local logs        (LOG_DIR =D:\Logs\WikiA):      D:\Logs\WikiA
-```
 
 ---
 
-### Conflict handling
+<!-- ═══════════════════════════════════════════════════════════════════════
+     OPERATIONS / DAY-TO-DAY
+     Uploading, LDAP troubleshooting, sync monitoring.
+     ═══════════════════════════════════════════════════════════════════════ -->
 
-| Scenario | What happens |
+## Uploading Documents
+
+1. Open **Documents** in the sidebar
+2. Drag & drop, or click **Choose File** — supported types: PDF, Word, Excel, PowerPoint, images, ZIP, CSV (max 50 MB per file)
+3. To attach to a page: open the page editor → **Quick Media Insert** sidebar panel → use **Insert Image…** or **Insert Link to File…**
+4. On the page view, attachments are download buttons — files download before opening (no inline Office preview).
+
+## LDAP Troubleshooting
+
+| Symptom | Fix |
 |---|---|
-| Two users edit **different** pages simultaneously on different servers | ✅ No conflict — separate files |
-| Two users edit the **same** page simultaneously on different servers | ⚠ Last save wins. The app shows a warning banner to the second saver. SyncThing creates a `.sync-conflict-…` copy of the earlier version |
-| SyncThing conflict copies (`.sync-conflict-…json`) appear in `<DATA_DIR>/pages/` | ✅ Automatically ignored — the app filters them out and they never appear as pages |
-| A user uploads a file on Server A | ✅ SyncThing syncs it to all other servers within seconds |
-| User's session is pinned to Server A, Server A dies | ✅ LB falls them to Server B; Server B already has the session JSON (synced); they stay logged in without re-auth |
-| User updates their profile / role changes | ✅ Session JSON is re-written on the pinned server; SyncThing replicates it within seconds |
+| "Authentication error" on login | Verify `LDAP_URL`, `LDAP_BIND_DN`, `LDAP_BIND_PASSWORD` |
+| Certificate errors | Set `LDAP_TLS_REJECT_UNAUTHORIZED=false` |
+| Wrong users found | Adjust `LDAP_SEARCH_FILTER` (default: `(sAMAccountName={{username}})`) |
+| `ldap://` vs `ldaps://` | `ldaps://` = port 636, TLS-secured LDAP |
 
-### SyncThing conflict copies
+Check the server console for `[LDAP]` prefixed error lines when diagnosing auth.
 
-When SyncThing detects a write conflict it creates a file like:
-```
-<DATA_DIR>/pages/my-page.sync-conflict-20260902-143012-DEVICEID.json
-<DATA_DIR>/sessions/2DQw41MHBQ66BQ6ZSKi.sync-conflict-20260909-180000-DEVICEID.json
-```
-Page conflict copies are **silently ignored** by the application (filtered in `listPages()`).  
-Session conflict copies: if you ever see them inside `<DATA_DIR>/sessions/` it means sticky sessions are not configured at the LB. The file with the newer `mtime` is the authoritative one; you can safely delete the `*.sync-conflict-*` version after confirming the user can still log in.
+## Monitoring Sync Status
 
-### Recommended write strategy
+SyncThing UI lives at `http://localhost:8384` (default) on each server.  Confirm all
+nodes report "Up to Date" before making large or important edits.
 
-For best results, designate **one primary server** as the main editing server and treat other servers as read replicas. SyncThing will propagate all changes within seconds. Simultaneous edits from multiple servers are safe but will trigger the conflict warning.
-
-### Monitoring sync status
-
-You can check SyncThing sync status at `http://localhost:8384` (default SyncThing web UI) on any server to confirm all nodes are up to date before making important edits.
-
-Verify session sharing end-to-end with:
+Session sharing smoke test:
 ```powershell
-# On Server A: log in via browser, then:
+# On Server A — log in via browser, then:
 #   Stop-Service -Name OnlineWikiA    (or kill the node process)
-# On the browser: reload — should still be authenticated via Server B.
+# In the same browser — reload the page.
+# Expected: still authenticated, served by Server B via LB, no re-login prompt.
 ```
 
 ---
 
-## Session Idle-Time Enforcement (Option C)
-
-OnlineWiki enforces an inactivity logout so abandoned sessions never stay open forever, even on shared kiosk-style machines. This is a layered security model:
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Layer 1: Server-side hard ceiling (rolling cookie)                 │
-│           SESSION_MAX_AGE_HOURS=8 — even if the user clicks         │
-│           continuously, the session dies after 8h from first login. │
-│           Every authenticated HTTP request re-writes the cookie    │
-│           with a fresh Max-Age (rolling:true).                      │
-├─────────────────────────────────────────────────────────────────────┤
-│  Layer 2: Client-side inactivity monitor                           │
-│           SESSION_IDLE_MINUTES=15 — user must generate a human     │
-│           activity event (keypress, mouse click/move, scroll,      │
-│           touch, pointer, wheel, drag) within this window.         │
-│           Background fetches, keepalive polls, and asset loads     │
-│           do NOT count as "activity" — only real HUMAN input.      │
-├─────────────────────────────────────────────────────────────────────┤
-│  Layer 3: Pre-expiry warning modal (with live countdown)           │
-│           SESSION_IDLE_WARN_SECONDS=120 — N seconds before Layer 2  │
-│           triggers, an alertdialog appears with a countdown pill   │
-│           and two buttons:                                          │
-│             [Extend session]  →  GET /api/session/keepalive 204    │
-│                                   resets both browser idle clock   │
-│                                   AND server-side rolling cookie    │
-│             [Log out now]     →  POST /logout CSRF-safe form       │
-│           Countdown turns red when ≤ 30 s remaining.               │
-│           ESC key = same as [Log out now].                         │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### User-visible flow
-
-```
- User is active ──► (nothing)
-        │
-        ▼  no keyboard/mouse for (SESSION_IDLE_MINUTES − SESSION_IDLE_WARN_SECONDS) seconds
- Warning modal appears with countdown (W = 120 s default)
-        │
-        ├─ User clicks [Extend session] ──► GET /api/session/keepalive (204 No Content)
-        │                                     rolling cookie refreshed, idle timer reset
-        │                                     modal closes
-        │
-        ├─ Any HUMAN activity (keypress, mousedown, scroll, …)
-        │      ──► idle timer reset, modal closes (deduped via 60 ms debounce)
-        │
-        ├─ User clicks [Log out now] ──► POST /logout → /login
-        │
-        ▼  countdown reaches 0
- Auto POST /logout?reason=inactive
-        │
-        ▼
- /login?reason=inactive — friendly "You were signed out automatically
-              because you were inactive. Sign back in to continue."
-              info banner above the sign-in card
-```
-
-### Disable idle enforcement
-
-If you deploy OnlineWiki on a closed, air-gapped intranet where no auto-logout is desired, set either variable to zero:
-
-```env
-# Disables the idle monitor entirely:
-SESSION_IDLE_MINUTES=0
-#   OR
-SESSION_IDLE_WARN_SECONDS=0
-#   OR (safety gate)
-SESSION_IDLE_WARN_SECONDS >= SESSION_IDLE_MINUTES * 60
-```
-
-When disabled: no modal HTML is rendered, no wikiConfig is injected into the page, no activity listeners are attached, and the keepalive endpoint still returns 204 but is never called.
-
-### Audit trail
-
-Every logout (manual or idle) writes a `USER_LOGOUT` event to the **daily audit log** under `<LOG_DIR>/audit-YYYY-MM-DD.log`:
-
-```json
-{"event":"USER_LOGOUT","username":"jdoe","ip":"10.0.0.5","reason":"inactive"}
-{"event":"USER_LOGOUT","username":"jsmith","ip":"10.0.0.9","reason":"manual"}
-```
-
-`reason` values:
-- `"inactive"` — the client-side idle monitor fired a `POST /logout?reason=inactive`
-- `"manual"` — user clicked the topbar **Sign Out** button or the warning modal's **[Log out now]** button (default when no reason query param is present)
-
----
+<!-- ═══════════════════════════════════════════════════════════════════════
+     REFERENCE · Environment Variables
+     ═══════════════════════════════════════════════════════════════════════ -->
 
 ## Environment Variable Reference (Complete)
 
@@ -673,12 +690,34 @@ All variables are read from `.env` at startup. For multi-server deployments, var
 
 ## License
 
-OnlineWiki is released under the **MIT License**. See [LICENSE](file:///c:/Users/leeda/OneDrive/Dev/Trae/OnlineWiki/LICENSE) for the full text.
+OnlineWiki is released under the **MIT License — With Attribution Requirement**
+(SPDX short-form: `MIT WITH Attribution-3.0-OnlineWiki`).  It is still fully
+open source — the only additional obligation beyond standard MIT is that
+deployments / redistributions must preserve the attribution notices.
+
+### Summary of obligations
+
+| # | Obligation | Applies to |
+|---|---|---|
+| 1 | Copyright notice + this permission text preserved in all copies | Source, binaries, Docker images, redistributions — standard MIT base |
+| 2 | **Attribution notice displayed in the running application UI** (footer / About / Credits) | Any deployment or derivative whose UI is reachable by end users (web / desktop / mobile / API / docs) |
+| 3 | Clear disclosure of modifications, plus link to modified source when distributed externally | Forks, bundles, re-branded deployments |
+| 4 | Third-party component licenses preserved (see Third-Party section) | All packages bundled via npm dependency resolution |
+
+Clause (2) attribution text that must be displayed in the running installation:
+
+> **OnlineWiki** — Licensed under MIT (with attribution) · © 2026 OnlineWiki Contributors · https://github.com/onlinewiki/onlinewiki
+
+It must be reachable by a reasonable end-user action (footer, About page, Preferences, etc.) and must **not** be hidden behind a login wall if the deployment exposes any UI to anonymous or unprivileged users.
+
+Full license text follows below.  See [LICENSE](file:///c:/Users/leeda/OneDrive/Dev/Trae/OnlineWiki/LICENSE) for the canonical copy.
 
 ```
-MIT License
+MIT License — With Attribution Requirement
+(SPDX short-form: MIT WITH Attribution-3.0-OnlineWiki)
 
 Copyright (c) 2026 OnlineWiki Contributors
+Project Home: https://github.com/onlinewiki/onlinewiki
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -687,8 +726,48 @@ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 copies of the Software, and to permit persons to whom the Software is
 furnished to do so, subject to the following conditions:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. The above copyright notice, this permission notice, and the attribution
+   statement below (including the project home URL) shall be included in all
+   copies or substantial portions of the Software, including but not limited
+   to all source-code distributions, packaged distributions, binary builds,
+   and Docker images.
+
+2. ATTRIBUTION IN RUNNING INSTALLATIONS — If you deploy or distribute the
+   Software in a form that makes its user interface accessible to end users
+   (whether via web browser, desktop application, mobile application, API,
+   or any other mechanism), you MUST prominently display the following
+   attribution notice, clearly legible and reachable by a reasonable
+   end-user action, in a location that is standard for attribution
+   notices (such as a footer, About page, Credits page, or Preferences
+   screen):
+
+       "OnlineWiki — Licensed under MIT (with attribution) ·
+        © 2026 OnlineWiki Contributors ·
+        https://github.com/onlinewiki/onlinewiki"
+
+   The attribution notice must NOT be hidden behind a login wall that is
+   unavailable to anonymous or non-privileged users of the installation
+   (if such users can access any part of the Software's UI).
+
+3. MODIFICATIONS — Modified versions of the Software (including forks,
+   plugin bundles, derivative works that include or link against the
+   Software's source, and re-branded deployments) MUST additionally
+   include a clear statement disclosing that changes were made relative
+   to the original upstream distribution, along with a link to the
+   modified source code when distributed outside your organisation
+   (pursuant to the MIT base terms).  The notice described in clause (2)
+   must still be preserved and may be supplemented with additional
+   attribution text describing your modifications.
+
+4. THIRD-PARTY COMPONENTS — This Software is distributed alongside or
+   statically links a number of third-party open-source components.
+   Their respective copyright notices and license terms are reproduced
+   in the "Third-Party Licenses & Attribution" section of the project
+   README.md and/or in the package metadata, and those terms govern the
+   components to which they apply.  The attribution requirements above
+   apply to the OnlineWiki work itself and do not supersede any
+   attribution required by the individual third-party components'
+   own licenses.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,

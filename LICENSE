@@ -1,6 +1,8 @@
-MIT License
+MIT License — With Attribution Requirement
+(SPDX short-form: MIT WITH Attribution-3.0-OnlineWiki)
 
 Copyright (c) 2026 OnlineWiki Contributors
+Project Home: https://github.com/onlinewiki/onlinewiki
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -9,8 +11,48 @@ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 copies of the Software, and to permit persons to whom the Software is
 furnished to do so, subject to the following conditions:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. The above copyright notice, this permission notice, and the attribution
+   statement below (including the project home URL) shall be included in all
+   copies or substantial portions of the Software, including but not limited
+   to all source-code distributions, packaged distributions, binary builds,
+   and Docker images.
+
+2. ATTRIBUTION IN RUNNING INSTALLATIONS — If you deploy or distribute the
+   Software in a form that makes its user interface accessible to end users
+   (whether via web browser, desktop application, mobile application, API,
+   or any other mechanism), you MUST prominently display the following
+   attribution notice, clearly legible and reachable by a reasonable
+   end-user action, in a location that is standard for attribution
+   notices (such as a footer, About page, Credits page, or Preferences
+   screen):
+
+       "OnlineWiki — Licensed under MIT (with attribution) ·
+        © 2026 OnlineWiki Contributors ·
+        https://github.com/onlinewiki/onlinewiki"
+
+   The attribution notice must NOT be hidden behind a login wall that is
+   unavailable to anonymous or non-privileged users of the installation
+   (if such users can access any part of the Software's UI).
+
+3. MODIFICATIONS — Modified versions of the Software (including forks,
+   plugin bundles, derivative works that include or link against the
+   Software's source, and re-branded deployments) MUST additionally
+   include a clear statement disclosing that changes were made relative
+   to the original upstream distribution, along with a link to the
+   modified source code when distributed outside your organisation
+   (pursuant to the MIT base terms).  The notice described in clause (2)
+   must still be preserved and may be supplemented with additional
+   attribution text describing your modifications.
+
+4. THIRD-PARTY COMPONENTS — This Software is distributed alongside or
+   statically links a number of third-party open-source components.
+   Their respective copyright notices and license terms are reproduced
+   in the "Third-Party Licenses & Attribution" section of the project
+   README.md and/or in the package metadata, and those terms govern the
+   components to which they apply.  The attribution requirements above
+   apply to the OnlineWiki work itself and do not supersede any
+   attribution required by the individual third-party components'
+   own licenses.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
