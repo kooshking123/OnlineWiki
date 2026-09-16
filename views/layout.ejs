@@ -1,5 +1,6 @@
 <% const st = (typeof settings !== 'undefined' && settings) ? settings : { siteTitle: 'OnlineWiki', siteTagline: 'Internal knowledge base and collaborative wiki' }; %>
 <% const _theme = (typeof serverUserTheme === 'string' && (serverUserTheme === 'light' || serverUserTheme === 'dark')) ? serverUserTheme : 'light'; %>
+<% const _logoUrl = (typeof logoUrl !== 'undefined' && logoUrl) ? logoUrl : null; %>
 <!DOCTYPE html>
 <html lang="en" class="theme-<%= _theme %>">
 <head>
@@ -32,7 +33,11 @@
   <aside class="sidebar" id="sidebar" aria-label="Site navigation">
     <div class="sidebar-header">
       <a href="/" class="sidebar-logo" aria-label="Wiki home">
-        <span class="logo-icon" aria-hidden="true">📚</span>
+        <% if (_logoUrl) { %>
+          <img src="<%= _logoUrl %>" alt="" class="logo-img" aria-hidden="true" referrerpolicy="no-referrer" />
+        <% } else { %>
+          <span class="logo-icon" aria-hidden="true">📚</span>
+        <% } %>
         <span class="logo-text"><%= st.siteTitle %></span>
       </a>
     </div>

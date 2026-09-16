@@ -287,6 +287,13 @@ input, textarea, select { font-family: inherit; }
 }
 .sidebar-logo:hover { background: var(--c-bg-card); color: var(--c-text); }
 .logo-icon { font-size: 1.25rem; line-height: 1; }
+.logo-img {
+  width: 1.75rem;
+  height: 1.75rem;
+  object-fit: contain;
+  display: block;
+  flex-shrink: 0;
+}
 .logo-text { letter-spacing: -0.01em; }
 
 /* ─── Sidebar search ─────────────────────────────────────────────────────── */
@@ -1526,6 +1533,15 @@ a.user-chip-link:hover {
   margin-bottom: 1.75rem;
 }
 .login-logo-icon { font-size: 2.5rem; display: block; margin-bottom: 0.6rem; }
+.login-logo-img {
+  width: auto;
+  max-width: 96px;
+  height: auto;
+  max-height: 80px;
+  object-fit: contain;
+  display: block;
+  margin: 0 auto 0.6rem auto;
+}
 .login-title {
   font-size: 1.6rem;
   font-weight: 700;

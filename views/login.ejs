@@ -1,4 +1,5 @@
 <% const s = typeof settings !== 'undefined' && settings ? settings : { siteTitle: 'OnlineWiki', siteTagline: 'Internal knowledge base and collaborative wiki' }; %>
+<% const _logoUrl = (typeof logoUrl !== 'undefined' && logoUrl) ? logoUrl : null; %>
 <!DOCTYPE html>
 <html lang="en" class="theme-neutral">
 <head>
@@ -24,7 +25,11 @@
 
       <!-- Logo -->
       <div class="login-logo" aria-label="<%= s.siteTitle %>">
-        <span class="login-logo-icon" aria-hidden="true">📚</span>
+        <% if (_logoUrl) { %>
+          <img src="<%= _logoUrl %>" alt="" class="login-logo-img" aria-hidden="true" referrerpolicy="no-referrer" />
+        <% } else { %>
+          <span class="login-logo-icon" aria-hidden="true">📚</span>
+        <% } %>
         <h1 class="login-title"><%= s.siteTitle %></h1>
         <p class="login-subtitle"><%= s.siteTagline %></p>
       </div>

@@ -24,13 +24,51 @@
   const e = v => (v == null ? '' : String(v))
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  const viewLogoUrl = (typeof logoUrl !== 'undefined' && logoUrl) ? logoUrl : null;
 %>
 
 <form method="POST" action="/admin/settings" class="card settings-card" id="settingsForm" novalidate>
   <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+  <input type="hidden" name="logoData" id="logoData" value="" />
+  <input type="hidden" name="clearLogo" id="clearLogoField" value="" />
 
   <div class="settings-section">
     <h2 class="settings-section-title">Branding</h2>
+
+    <div class="form-group" style="margin-bottom:1.5rem;">
+      <label class="form-label">
+        Site logo
+        <span class="form-hint">Displayed in the top-left sidebar and on the sign-in page. PNG, JPEG, WebP, or SVG (max 2 MB).</span>
+      </label>
+      <div class="logo-settings-row">
+        <div class="logo-preview" id="logoPreview" aria-label="Current logo preview">
+          <% if (viewLogoUrl) { %>
+            <img src="<%= viewLogoUrl %>" alt="Current site logo" class="logo-preview-img" referrerpolicy="no-referrer" />
+          <% } else { %>
+            <div class="logo-preview-fallback" aria-hidden="true">
+              <span class="logo-fallback-icon">📚</span>
+              <span class="logo-fallback-text">Default</span>
+            </div>
+          <% } %>
+        </div>
+        <div class="logo-controls">
+          <div class="avatar-upload-row">
+            <label class="btn btn-ghost" for="logoFile" style="cursor:pointer;" data-tooltip="Pick a PNG, JPEG, WebP or SVG image from your device to use as the site logo.">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Upload logo
+            </label>
+            <input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden />
+            <button type="button" class="btn btn-ghost" id="logoResetBtn" style="display:none;" data-tooltip="Remove the selected logo and go back to the currently saved one.">Reset</button>
+          </div>
+          <% if (viewLogoUrl) { %>
+            <button type="button" class="btn btn-sm btn-danger" id="logoRemoveBtn" style="margin-top:0.75rem;" data-tooltip="Remove the custom site logo and revert to the default books icon.">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/></svg>
+              Remove logo
+            </button>
+          <% } %>
+        </div>
+      </div>
+    </div>
 
     <div class="form-group">
       <label class="form-label" for="siteTitle">
@@ -94,3 +132,123 @@
   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
   Setting values are stored in <strong>data/settings.json</strong> (atomic write, no database).
 </div>
+
+<style>
+  .logo-settings-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 1.25rem;
+    flex-wrap: wrap;
+  }
+  .logo-preview {
+    width: 140px;
+    height: 140px;
+    border-radius: var(--r-lg);
+    border: 1.5px dashed var(--c-border);
+    background: var(--c-bg-card);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .logo-preview-img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+  }
+  .logo-preview-fallback {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+    color: var(--c-text-muted);
+  }
+  .logo-fallback-icon { font-size: 2.5rem; line-height: 1; }
+  .logo-fallback-text { font-size: 0.78rem; }
+  .logo-controls {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    flex: 1;
+    min-width: 200px;
+  }
+</style>
+
+<script>
+(function () {
+  var fileInput       = document.getElementById('logoFile');
+  var previewEl       = document.getElementById('logoPreview');
+  var dataField       = document.getElementById('logoData');
+  var clearField      = document.getElementById('clearLogoField');
+  var resetBtn        = document.getElementById('logoResetBtn');
+  var removeBtn       = document.getElementById('logoRemoveBtn');
+  var form            = document.getElementById('settingsForm');
+  var savedPreviewHtml = previewEl ? previewEl.innerHTML : '';
+
+  function setPreviewDataUrl(dataUrl) {
+    if (!previewEl) return;
+    previewEl.innerHTML = '<img src="' + dataUrl + '" alt="Selected logo preview" class="logo-preview-img" referrerpolicy="no-referrer" />';
+  }
+
+  function restoreSavedPreview() {
+    if (!previewEl) return;
+    previewEl.innerHTML = savedPreviewHtml;
+  }
+
+  if (fileInput) {
+    fileInput.addEventListener('change', function () {
+      var file = this.files && this.files[0];
+      if (!file) return;
+      if (file.size > 2 * 1024 * 1024) {
+        alert('Logo image is too large. Maximum size is 2 MB.');
+        fileInput.value = '';
+        return;
+      }
+      var allowedTypes = ['image/png','image/jpeg','image/jpg','image/webp','image/svg+xml'];
+      if (allowedTypes.indexOf(file.type) === -1) {
+        alert('Logo must be a PNG, JPEG, WebP, or SVG image.');
+        fileInput.value = '';
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        var dataUrl = e.target && e.target.result;
+        if (!dataUrl || typeof dataUrl !== 'string') return;
+        setPreviewDataUrl(dataUrl);
+        dataField.value = dataUrl;
+        clearField.value = '';
+        if (resetBtn) resetBtn.style.display = '';
+      };
+      reader.onerror = function () {
+        alert('Could not read the selected image file.');
+        fileInput.value = '';
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  if (resetBtn) {
+    resetBtn.addEventListener('click', function () {
+      dataField.value = '';
+      clearField.value = '';
+      if (fileInput) fileInput.value = '';
+      restoreSavedPreview();
+      resetBtn.style.display = 'none';
+    });
+  }
+
+  if (removeBtn) {
+    removeBtn.addEventListener('click', function () {
+      if (!confirm('Remove the custom site logo and revert to the default books icon?')) return;
+      dataField.value = '';
+      clearField.value = '1';
+      if (fileInput) fileInput.value = '';
+      if (resetBtn) resetBtn.style.display = 'none';
+      previewEl.innerHTML = '<div class="logo-preview-fallback" aria-hidden="true"><span class="logo-fallback-icon">📚</span><span class="logo-fallback-text">Default</span></div>';
+      savedPreviewHtml = previewEl.innerHTML;
+    });
+  }
+})();
+</script>

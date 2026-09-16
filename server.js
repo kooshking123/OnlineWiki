@@ -266,6 +266,7 @@ const LOGS_DIR_ABS = path.resolve(LOGS_DIR);
 const PAGES_DIR     = path.join(DATA_DIR, 'pages');
 const UPLOADS_DIR   = path.join(DATA_DIR, 'uploads');
 const AVATARS_DIR   = path.join(DATA_DIR, 'avatars');
+const LOGOS_DIR     = path.join(DATA_DIR, 'logos');
 const SESSIONS_DIR  = path.join(DATA_DIR, 'sessions');
 const USERS_FILE    = path.join(DATA_DIR, 'users.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
@@ -279,6 +280,7 @@ fs.ensureDirSync(LOGS_DIR);
 fs.ensureDirSync(PAGES_DIR);
 fs.ensureDirSync(UPLOADS_DIR);
 fs.ensureDirSync(AVATARS_DIR);
+fs.ensureDirSync(LOGOS_DIR);
 fs.ensureDirSync(SESSIONS_DIR);
 // Ensure the users registry exists
 if (!fs.existsSync(USERS_FILE)) fs.writeJsonSync(USERS_FILE, {}, { spaces: 2 });
@@ -288,12 +290,15 @@ const DEFAULT_SETTINGS = {
   siteTitle:     'OnlineWiki',
   siteTagline:   'Internal knowledge base and collaborative wiki',
   homeHeading:   'Wiki Home',
-  homeSubtitle:  '{N} page{N_S}'
+  homeSubtitle:  '{N} page{N_S}',
+  logo:          null
 };
 function loadSettings() {
   try {
     const raw = fs.readJsonSync(SETTINGS_FILE);
-    return Object.assign({}, DEFAULT_SETTINGS, (raw && typeof raw === 'object') ? raw : {});
+    const merged = Object.assign({}, DEFAULT_SETTINGS, (raw && typeof raw === 'object') ? raw : {});
+    if (merged.logo !== null && typeof merged.logo !== 'string') merged.logo = null;
+    return merged;
   } catch {
     return Object.assign({}, DEFAULT_SETTINGS);
   }
@@ -301,7 +306,11 @@ function loadSettings() {
 function saveSettings(obj) {
   const clean = {};
   Object.keys(DEFAULT_SETTINGS).forEach(k => {
-    clean[k] = typeof obj[k] === 'string' ? obj[k] : DEFAULT_SETTINGS[k];
+    if (k === 'logo') {
+      clean[k] = (obj[k] === null || typeof obj[k] === 'string') ? obj[k] : DEFAULT_SETTINGS[k];
+    } else {
+      clean[k] = typeof obj[k] === 'string' ? obj[k] : DEFAULT_SETTINGS[k];
+    }
   });
   writeJsonAtomic(SETTINGS_FILE, clean);
   return clean;
@@ -720,7 +729,9 @@ app.use((req, res, next) => {
   res.locals.user  = req.user || null;
   res.locals.serverUserTheme = coerceTheme(req.user?.theme);
   res.locals.flash = { error: req.flash('error'), success: req.flash('success'), info: req.flash('info') };
-  res.locals.settings = loadSettings();
+  const _settings = loadSettings();
+  res.locals.settings = _settings;
+  res.locals.logoUrl = logoUrlFor(_settings.logo);
   res.locals.navFlat  = [];
   res.locals.navPages = [];
   // Client-side idle enforcement config (rendered as window.__WIKI_CONFIG in
@@ -1213,6 +1224,43 @@ function avatarUrlFor(filename) {
   return `/avatars/${encodeURIComponent(clean)}`;
 }
 
+// ─── Logo helpers ──────────────────────────────────────────────────────────
+const LOGO_ALLOWED_EXT = ['.png', '.jpg', '.jpeg', '.webp', '.svg'];
+function logoUrlFor(filename) {
+  if (!filename || typeof filename !== 'string') return null;
+  const clean = String(filename).replace(/\0/g, '');
+  const ext = path.extname(clean).toLowerCase();
+  if (!LOGO_ALLOWED_EXT.includes(ext)) return null;
+  return `/logos/${encodeURIComponent(clean)}`;
+}
+function _deleteLogoFile(filename) {
+  if (!filename) return;
+  try {
+    const candidate = assertWithinBaseDir(filename, LOGOS_DIR);
+    if (candidate && fs.existsSync(candidate)) fs.unlinkSync(candidate);
+  } catch (e) {
+    systemLogger.warn('Failed to clean up old logo file', { filename, error: e.message });
+  }
+}
+function _saveLogoFromDataUrl(dataUrl, oldFilename) {
+  if (!dataUrl || typeof dataUrl !== 'string') throw new Error('No logo data provided.');
+  const m = dataUrl.match(/^data:image\/(png|jpeg|jpg|webp|svg\+xml);base64,(.+)$/i);
+  if (!m) throw new Error('Logo must be a PNG, JPEG, WebP, or SVG image.');
+  const extRaw = m[1].toLowerCase();
+  const ext = (extRaw === 'jpeg' || extRaw === 'jpg') ? '.jpg' : (extRaw === 'svg+xml' ? '.svg' : `.${extRaw}`);
+  if (!LOGO_ALLOWED_EXT.includes(ext)) throw new Error('Unsupported logo image format.');
+  let buf;
+  try { buf = Buffer.from(m[2], 'base64'); } catch { throw new Error('Logo image data is corrupt.'); }
+  if (buf.length === 0) throw new Error('Logo image is empty.');
+  if (buf.length > 2 * 1024 * 1024) throw new Error('Logo image is too large (max 2 MB).');
+  const filename = `logo-${Date.now()}${ext}`;
+  const checked = assertWithinBaseDir(path.basename(filename), LOGOS_DIR);
+  if (!checked) throw new Error('Invalid logo filename.');
+  fs.writeFileSync(checked, buf);
+  if (oldFilename && oldFilename !== filename) _deleteLogoFile(oldFilename);
+  return filename;
+}
+
 function fileIcon(filename) {
   const ext = path.extname(filename).toLowerCase();
   return ({
@@ -1276,9 +1324,12 @@ const upload = multer({
 app.get('/login', (req, res) => {
   if (req.isAuthenticated()) return res.redirect('/');
   const inactiveReason = req.query.reason === 'inactive';
+  const s = loadSettings();
   res.render('login', {
     title: 'Sign In — OnlineWiki',
     layout: false,
+    settings: s,
+    logoUrl:  logoUrlFor(s.logo),
     csrfToken: res.locals.csrfToken,
     inactiveReason
   });
@@ -2325,9 +2376,11 @@ function _trimTo(str, max) {
 }
 
 app.get('/admin/settings', ensureRole('administrator'), (req, res) => {
+  const s = loadSettings();
   res.render('admin/settings', {
     title:    'Site Settings — OnlineWiki',
-    settings: loadSettings(),
+    settings: s,
+    logoUrl:  logoUrlFor(s.logo),
     csrfToken: res.locals.csrfToken
   });
 });
@@ -2345,11 +2398,32 @@ app.post('/admin/settings', ensureRole('administrator'), (req, res) => {
     const v = typeof s === 'string' ? s : '';
     return sanitizeHtml(v, PLAINTEXT_OPTS).replace(/<[^>]+>/g, '');
   };
+  const currentSettings = loadSettings();
+  let newLogo = currentSettings.logo;
+
+  const logoData = typeof raw.logoData === 'string' && raw.logoData.startsWith('data:') ? raw.logoData : '';
+  const clearLogo = raw.clearLogo === '1' || raw.clearLogo === 'true';
+
+  if (clearLogo) {
+    if (newLogo) {
+      _deleteLogoFile(newLogo);
+      newLogo = null;
+    }
+  } else if (logoData) {
+    try {
+      newLogo = _saveLogoFromDataUrl(logoData, currentSettings.logo);
+    } catch (logoErr) {
+      req.flash('error', logoErr.message || 'Failed to save logo image.');
+      return res.redirect('/admin/settings');
+    }
+  }
+
   const trimmed = {
     siteTitle:    _trimTo(stripPlain(raw.siteTitle),    80),
     siteTagline:  _trimTo(stripPlain(raw.siteTagline),  200),
     homeHeading:  _trimTo(stripPlain(raw.homeHeading),  80),
-    homeSubtitle: _trimTo(stripPlain(raw.homeSubtitle), 160)
+    homeSubtitle: _trimTo(stripPlain(raw.homeSubtitle), 160),
+    logo:         newLogo
   };
 
   if (!trimmed.siteTitle)   trimmed.siteTitle   = DEFAULT_SETTINGS.siteTitle;
@@ -2359,7 +2433,8 @@ app.post('/admin/settings', ensureRole('administrator'), (req, res) => {
 
   auditLogger.info('SETTINGS_UPDATED', {
     changedBy: req.user.username, ip: req.ip,
-    newTitles: { siteTitle: saved.siteTitle, homeHeading: saved.homeHeading }
+    newTitles: { siteTitle: saved.siteTitle, homeHeading: saved.homeHeading },
+    logoChanged: !!logoData || clearLogo
   });
   req.flash('success', 'Site settings saved.');
   res.redirect('/admin/settings');
@@ -2498,6 +2573,15 @@ app.get('/api/search', ensureAuth, (req, res) => {
 // ─── Avatars static (auth gated, containment-checked) ─────────────────────────
 app.use('/avatars', ensureAuth, function (req, res, next) {
   const candidate = assertWithinBaseDir(decodeURIComponent(req.path.slice(1)), AVATARS_DIR);
+  if (!candidate) return res.sendStatus(404);
+  fs.stat(candidate, (err, st) => {
+    if (err || !st.isFile()) return res.sendStatus(404);
+    res.sendFile(candidate, { etag: true, maxAge: '7d' });
+  });
+});
+
+app.use('/logos', function (req, res, next) {
+  const candidate = assertWithinBaseDir(decodeURIComponent(req.path.slice(1)), LOGOS_DIR);
   if (!candidate) return res.sendStatus(404);
   fs.stat(candidate, (err, st) => {
     if (err || !st.isFile()) return res.sendStatus(404);
