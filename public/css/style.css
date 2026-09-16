@@ -1,10 +1,66 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    OnlineWiki — style.css
-   Premium dark-mode design
+   Dual-theme design (default: Light, opt-in: Dark)
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ─── Design tokens ──────────────────────────────────────────────────────── */
-:root {
+/* ─── Design tokens — Light theme (baseline / default) ──────────────────── */
+:root,
+html.theme-light {
+  /* Palette */
+  --c-bg:           #ffffff;
+  --c-bg-subtle:    #f6f8fa;
+  --c-bg-card:      #ffffff;
+  --c-bg-overlay:   #f0f2f5;
+  --c-border:       #d0d7de;
+  --c-border-muted: #e6e8eb;
+
+  --c-text:         #1f2328;
+  --c-text-sub:     #57606a;
+  --c-text-muted:   #8c959f;
+
+  --c-accent:       #2563eb;
+  --c-accent-hover: #1d4ed8;
+  --c-accent-muted: #dbeafe;
+
+  --c-surface-hover: rgba(37, 99, 235, 0.07);
+  --c-border-soft:   rgba(106, 115, 125, 0.18);
+
+  --c-success:      #1f883d;
+  --c-success-bg:   #dafbe1;
+  --c-danger:       #cf222e;
+  --c-danger-bg:    #ffebe9;
+  --c-warning:      #9a6700;
+  --c-warning-bg:   #fff8c5;
+
+  /* Sidebar */
+  --sidebar-w: 250px;
+
+  /* Topbar */
+  --topbar-h: 54px;
+
+  /* Radii */
+  --r-sm:  4px;
+  --r:     8px;
+  --r-lg:  12px;
+  --r-xl:  16px;
+  --r-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow:    0 4px 14px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
+  --shadow-lg: 0 10px 30px rgba(0,0,0,0.10), 0 4px 10px rgba(0,0,0,0.05);
+
+  /* Transitions */
+  --t: 150ms ease;
+  --t-slow: 280ms ease;
+
+  /* Typography */
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+
+/* ─── Design tokens — Dark theme (opt-in scoped override) ───────────────── */
+html.theme-dark {
   /* Palette */
   --c-bg:           #0d1117;
   --c-bg-subtle:    #161b22;
@@ -21,6 +77,9 @@
   --c-accent-hover: #78b0ff;
   --c-accent-muted: #1a3559;
 
+  --c-surface-hover: rgba(79, 148, 248, 0.12);
+  --c-border-soft:   rgba(139, 148, 158, 0.18);
+
   --c-success:      #3fb950;
   --c-success-bg:   #0e2a13;
   --c-danger:       #f85149;
@@ -28,31 +87,96 @@
   --c-warning:      #e3b341;
   --c-warning-bg:   #2d1c00;
 
-  /* Sidebar */
-  --sidebar-w: 250px;
-
-  /* Topbar */
-  --topbar-h: 54px;
-
-  /* Radii */
-  --r-sm:  4px;
-  --r:     8px;
-  --r-lg:  12px;
-  --r-xl:  16px;
-  --r-full: 9999px;
-
   /* Shadows */
   --shadow-sm: 0 1px 4px rgba(0,0,0,0.4);
   --shadow:    0 4px 16px rgba(0,0,0,0.5);
   --shadow-lg: 0 8px 32px rgba(0,0,0,0.6);
+}
 
-  /* Transitions */
-  --t: 150ms ease;
-  --t-slow: 280ms ease;
+/* ─── Neutral (login / unauthenticated) standalone palette ──────────────────
+   Unauthenticated entry pages deliberately ignore user light/dark preference
+   so the sign-in surface has its own brand identity before any account state
+   is loaded.  Tokens here are a mid-tone slate: soft white card on a gentle
+   blue-gray gradient — no strong bias toward light or dark content themes.  */
+html.theme-neutral {
+  --c-bg:            #f4f6fb;
+  --c-bg-overlay:    rgba(37, 99, 235, 0.07);
+  --c-bg-card:       #ffffff;
+  --c-surface:       #ffffff;
+  --c-surface-hover: rgba(37, 99, 235, 0.07);
+  --c-text:          #0f172a;
+  --c-text-muted:    #64748b;
+  --c-accent:        #2563eb;
+  --c-accent-hover:  #1d4ed8;
+  --c-border:        #e2e8f0;
+  --c-border-soft:   rgba(100, 116, 139, 0.15);
+  --c-danger:        #dc2626;
+  --c-danger-bg:     #fef2f2;
+  --c-warning:       #d97706;
+  --c-warning-bg:    #fffbeb;
+  --c-success:       #16a34a;
+  --c-info-bg:       #eff6ff;
 
-  /* Typography */
-  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.05);
+  --shadow:    0 4px 14px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 16px 48px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.04);
+
+  background:
+    radial-gradient(1200px 700px at 10% -10%, rgba(37,99,235,0.14), transparent 60%),
+    radial-gradient(900px 600px at 110% 10%, rgba(155,110,247,0.12), transparent 60%),
+    linear-gradient(180deg, #f4f6fb 0%, #eef2f9 50%, #eef3fb 100%);
+  color: var(--c-text);
+}
+html.theme-neutral body {
+  background: transparent;
+  color: var(--c-text);
+}
+html.theme-neutral .login-body { background: transparent; }
+html.theme-neutral .login-card {
+  background: var(--c-bg-card);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--c-border);
+  box-shadow: var(--shadow-lg);
+}
+html.theme-neutral .login-title    { color: var(--c-text); }
+html.theme-neutral .login-subtitle { color: var(--c-text-muted); }
+html.theme-neutral .login-help     { color: var(--c-text-muted); }
+html.theme-neutral .form-label     { color: var(--c-text); }
+html.theme-neutral .form-input,
+html.theme-neutral .form-input::placeholder {
+  background: #ffffff;
+  color: var(--c-text);
+  border-color: var(--c-border);
+}
+html.theme-neutral .form-input::placeholder { color: #94a3b8; background: transparent; }
+html.theme-neutral .form-input:focus {
+  border-color: var(--c-accent);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+html.theme-neutral .flash-error {
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
+  border-color: rgba(220, 38, 38, 0.25);
+}
+html.theme-neutral .flash-info {
+  background: var(--c-info-bg);
+  color: var(--c-accent);
+  border-color: rgba(37, 99, 235, 0.22);
+}
+html.theme-neutral .btn-primary {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  color: #ffffff;
+  border-color: transparent;
+  box-shadow: 0 1px 2px rgba(37,99,235,0.3), 0 8px 24px -8px rgba(37,99,235,0.55);
+}
+html.theme-neutral .btn-primary:hover {
+  background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(37,99,235,0.35), 0 12px 28px -8px rgba(37,99,235,0.65);
+}
+html.theme-neutral .btn-primary:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
 }
 
 /* ─── Reset ──────────────────────────────────────────────────────────────── */
@@ -300,6 +424,47 @@ input, textarea, select { font-family: inherit; }
   display: flex;
   align-items: center;
   gap: 0.75rem;
+}
+
+/* ─── Theme switch ──────────────────────────────────────────────────────── */
+.theme-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--c-bg-subtle);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-full);
+  transition: all var(--t);
+}
+.theme-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--c-text-sub);
+  border-radius: var(--r-full);
+  transition: all var(--t);
+}
+.theme-btn:hover {
+  color: var(--c-text);
+  background: var(--c-bg-overlay);
+}
+.theme-btn:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 1px;
+}
+.theme-btn-active {
+  background: var(--c-accent);
+  color: #fff !important;
+  box-shadow: var(--shadow-sm);
+}
+.theme-btn-active:hover {
+  background: var(--c-accent-hover);
 }
 
 .user-chip {

@@ -1,7 +1,18 @@
 <% const st = (typeof settings !== 'undefined' && settings) ? settings : { siteTitle: 'OnlineWiki', siteTagline: 'Internal knowledge base and collaborative wiki' }; %>
+<% const _theme = (typeof serverUserTheme === 'string' && (serverUserTheme === 'light' || serverUserTheme === 'dark')) ? serverUserTheme : 'light'; %>
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="theme-<%= _theme %>">
 <head>
+  <script>
+  (function(){
+    try {
+      var m = document.cookie.match(/(?:^|;\s*)theme=(light|dark)(?:;|$)/);
+      if (m) {
+        document.documentElement.className = 'theme-' + m[1];
+      }
+    } catch (e) {}
+  })();
+  </script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="<%= st.siteTagline %>" />
@@ -119,7 +130,16 @@
       <div class="topbar-spacer"></div>
 
       <div class="topbar-right">
-        <% if (user) {
+        <% if (user) { %>
+          <div class="theme-switch" role="group" aria-label="Theme preference">
+            <button type="button" class="theme-btn theme-btn-light <%= _theme === 'light' ? 'theme-btn-active' : '' %>" data-theme="light" aria-pressed="<%= _theme === 'light' %>" aria-label="Light theme">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+            </button>
+            <button type="button" class="theme-btn theme-btn-dark <%= _theme === 'dark' ? 'theme-btn-active' : '' %>" data-theme="dark" aria-pressed="<%= _theme === 'dark' %>" aria-label="Dark theme">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
+          </div>
+        <%
              const av = (typeof user.avatar === 'string' && user.avatar.length > 0 && /\.(png|jpg|jpeg|webp)$/i.test(user.avatar)) ? '/avatars/' + encodeURIComponent(user.avatar) : '';
              const initial = (user.displayName || user.username || 'U')[0].toUpperCase();
         %>
@@ -201,6 +221,7 @@
   <% if (typeof wikiConfig !== 'undefined' && wikiConfig) { %>
     <script id="wikiConfig" type="application/json"><%- JSON.stringify(wikiConfig) %></script>
   <% } %>
+  <script>window.__THEME_INITIAL__ = <%- JSON.stringify(_theme) %>;</script>
   <script src="/js/app.js"></script>
   <%- (typeof script  !== 'undefined' && script)  ? script  : '' %>
   <%- (typeof style   !== 'undefined' && style)   ? style   : '' %>

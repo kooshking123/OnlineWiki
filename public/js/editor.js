@@ -7,6 +7,7 @@
   'use strict';
 
   const WIKI = window.WIKI || { isNew: true, slug: '', content: '' };
+  const IS_DARK = (window.__EDITOR_THEME__ === 'dark');
 
   // ── TinyMCE ─────────────────────────────────────────────────────────────
   const IMAGE_EXT_RE = /\.(png|jpe?g|gif|svg|webp|bmp)$/i;
@@ -37,9 +38,8 @@
       'bullist numlist outdent indent | ' +
       'table | codesample | blockquote hr | ' +
       'searchreplace | fullscreen | preview | code | help',
-    // Dark skin (bundled with TinyMCE npm package)
-    skin:        'oxide-dark',
-    content_css: 'dark',
+    skin:        (window.__EDITOR_THEME__ === 'dark') ? 'oxide-dark' : 'oxide',
+    content_css: (window.__EDITOR_THEME__ === 'dark') ? 'dark'        : 'default',
     image_title: true,
     automatic_uploads: true,
     paste_data_images: true,
@@ -109,30 +109,79 @@
     },
     // Match wiki typography
     content_style: `
-      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+      html, body {
+        background: ${IS_DARK ? '#0d1117' : '#ffffff'} !important;
+      }
       body {
         font-family: 'Inter', sans-serif;
         font-size: 15px;
         line-height: 1.75;
-        color: #e6edf3;
-        background: #0d1117;
+        color: ${IS_DARK ? '#e6edf3' : '#1f2328'};
+        background: ${IS_DARK ? '#0d1117' : '#ffffff'};
         padding: 1.25rem 1.5rem;
         max-width: 860px;
         margin: 0 auto;
       }
-      h1,h2,h3,h4,h5,h6 { font-weight: 700; line-height: 1.3; margin-top: 1.4em; }
+      ::selection {
+        background: ${IS_DARK ? 'rgba(79,148,248,0.28)' : 'rgba(37,99,235,0.18)'};
+        color: inherit;
+      }
+      h1,h2,h3,h4,h5,h6 { font-weight: 700; line-height: 1.3; margin-top: 1.4em; color: inherit; }
       h1 { font-size: 1.9rem; }
       h2 { font-size: 1.45rem; }
       h3 { font-size: 1.2rem; }
-      a { color: #4f94f8; }
-      code { background: #21262d; padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.88em; font-family: 'JetBrains Mono', monospace; }
-      pre { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1rem; overflow-x: auto; }
-      blockquote { border-left: 3px solid #4f94f8; padding: 0.6rem 1rem; margin: 1rem 0; background: #1a3559; color: #8b949e; border-radius: 0 8px 8px 0; }
+      a { color: ${IS_DARK ? '#4f94f8' : '#2563eb'}; }
+      code {
+        background: ${IS_DARK ? '#21262d' : 'rgba(175,184,193,0.2)'};
+        color: ${IS_DARK ? '#e6edf3' : '#1f2328'};
+        padding: 0.1em 0.35em;
+        border-radius: 4px;
+        font-size: 0.88em;
+        font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }
+      pre {
+        background: ${IS_DARK ? '#161b22' : '#f6f8fa'};
+        border: 1px solid ${IS_DARK ? '#30363d' : '#d0d7de'};
+        border-radius: 8px;
+        padding: 1rem;
+        overflow-x: auto;
+        color: inherit;
+      }
+      pre code {
+        background: transparent;
+        padding: 0;
+        border-radius: 0;
+        font-size: 0.9em;
+      }
+      blockquote {
+        border-left: 3px solid ${IS_DARK ? '#4f94f8' : '#2563eb'};
+        padding: 0.6rem 1rem;
+        margin: 1rem 0;
+        background: ${IS_DARK ? 'rgba(31,61,109,0.5)' : 'rgba(37,99,235,0.08)'};
+        color: ${IS_DARK ? '#b7bdc7' : '#4a515a'};
+        border-radius: 0 8px 8px 0;
+      }
       table { border-collapse: collapse; width: 100%; }
-      th, td { border: 1px solid #30363d; padding: 0.5rem 0.75rem; }
-      th { background: #21262d; font-weight: 600; }
+      th, td {
+        border: 1px solid ${IS_DARK ? '#30363d' : '#d0d7de'};
+        padding: 0.5rem 0.75rem;
+      }
+      th {
+        background: ${IS_DARK ? '#21262d' : '#f6f8fa'};
+        font-weight: 600;
+      }
+      tr:nth-child(even) td {
+        background: ${IS_DARK ? 'rgba(255,255,255,0.02)' : 'rgba(175,184,193,0.08)'};
+      }
       img { max-width: 100%; border-radius: 8px; }
-      hr { border: none; border-top: 1px solid #30363d; margin: 2rem 0; }
+      hr {
+        border: none;
+        border-top: 1px solid ${IS_DARK ? '#30363d' : '#d0d7de'};
+        margin: 2rem 0;
+      }
+      ul, ol { padding-left: 1.6em; }
+      li { margin: 0.2em 0; }
     `,
     // Ensure form textarea is updated on save
     setup(editor) {
@@ -165,29 +214,57 @@
   });
 
   // ──────────────────────────────────────────────────────────────────────────
-  // Save flow — guard happens BEFORE any form submission is ever triggered
+  // Save flow — fully synchronous, 100% blocking confirm, zero async races
   // ──────────────────────────────────────────────────────────────────────────
-  // The previous approach (guarding inside a submit event handler) was racy:
-  // once requestSubmit() / click() starts the form submission machinery,
-  // Chrome's async algorithm may schedule the native POST before the
-  // synchronous window.confirm() inside the submit handler can prevent it —
-  // hence "saved before dialog appeared" and "saved even on Cancel".
   //
-  // The correct, race-free approach: do the ENTIRE duplicate check + confirm()
-  // inside the Save button click handler BEFORE WE EVER TELL THE FORM TO
-  // SUBMIT.  The form submit event is then reduced to a pure fast-path
-  // (either commit the real POST or defensively preventDefault if somehow the
-  // user triggered a submit by pressing Enter in a text field without going
-  // through our saveBtn click handler first).
+  // HISTORY (what was broken before this rewrite — all 4 rounds):
+  //   • Round 1: guard inside submit event listener — Chromium schedules the
+  //     native POST as an async task BEFORE window.confirm() inside the
+  //     submit handler returns → page saved before dialog paint.
+  //   • Round 2: guard moved to saveBtn click, but commitRealSubmit used
+  //     setTimeout(trySubmit, 0) + requestSubmit() → race still possible.
+  //   • Round 3: patchCommitRef wrapper added to flip submitOk → true,
+  //     but double-guard chain still leaked saves on Cancel (confirmed via
+  //     monkey-patch window.confirm returning false → page still saved).
+  //   • Round 4 (CURRENT, reproduced): confirm returns false (Cancel) yet
+  //     duplicate-title page is successfully written and browser navigates.
+  //
+  // ROOT CAUSE OF ALL ROUNDS:
+  //   Any code path that lets the browser see ANY form-submit machinery
+  //   (requestSubmit, .click() on a submitter inside <form>, setTimeout-
+  //   deferred .submit(), or even type=submit button + preventDefault)
+  //   is vulnerable to Chromium's async form-submission algorithm, which
+  //   schedules the real POST in parallel with the blocking confirm()
+  //   nested event loop.  POST wins the race → "saved before dialog".
+  //
+  // THE ONLY RELIABLE FIX:
+  //   (a) saveBtn is type="button" (NOT type=submit) — browser cannot infer
+  //       a default submit action from it even if preventDefault fails.
+  //   (b) commitRealSubmit calls the HTMLFormElement.submit() METHOD directly
+  //       — this does NOT fire the 'submit' event listener (HTML spec:
+  //       "The submit() method, when invoked, must submit the form element
+  //       from the form element itself, with the submitted from submit()
+  //       method flag set.").  Zero submit-event → zero double-guard race.
+  //   (c) No setTimeouts anywhere.  Everything stays on the same JS call
+  //       stack as the click / keypress that initiated save.
+  //   (d) window.confirm() is a TRUE blocking call (runs a nested native
+  //       message loop); we ONLY invoke the network POST after it returns.
+  //
+  // TWO MUTUALLY EXCLUSIVE SUBMISSION PATHWAYS, BOTH USING THE SAME GUARD:
+  //   Path A (primary, 99% of clicks):  saveBtn (type=button) click handler
+  //                                      → guard → form.submit()
+  //   Path B (belt-and-suspenders):      Enter-key in a text field triggers
+  //                                      the hidden defaultSubmitBtn via
+  //                                      form.submit event → guard → prevent
+  //                                      → form.submit()
   // ──────────────────────────────────────────────────────────────────────────
   const pageForm         = document.getElementById('pageForm');
   const saveBtn          = document.getElementById('saveBtn');
-  const defaultSubmitBtn = document.getElementById('defaultSubmitBtn'); // inside <form>
 
   function runDuplicateGuardAndMaybeConfirm() {
-    const titleInput    = document.getElementById('pageTitle');
-    const confirmInput  = document.getElementById('confirmDuplicate');
-    if (!titleInput || !confirmInput) return true; // no data to check → allow
+    var titleInput    = document.getElementById('pageTitle');
+    var confirmInput  = document.getElementById('confirmDuplicate');
+    if (!titleInput || !confirmInput) return true;
 
     var selfSlug       = (window.WIKI && window.WIKI.slug) ? window.WIKI.slug : '';
     var originalTitle  = (window.WIKI && window.WIKI.originalTitle ? window.WIKI.originalTitle : '').trim().toLowerCase();
@@ -209,7 +286,7 @@
       if (titleMatch && !slugMatch) { dup = t; break; }
     }
     if (!dup) return true;
-    if (confirmInput.value === 'true') return true;  // already pre-confirmed (rerender flow)
+    if (confirmInput.value === 'true') return true;
 
     var msg = 'Another page titled "' + dup.title +
       '" already exists (slug: /pages/' + dup.slug + ').\n\nSave anyway with a duplicate title?';
@@ -220,33 +297,10 @@
 
   function commitRealSubmit() {
     tinymce.triggerSave();
-    var submittingWithoutChecks = true; // belt-and-suspenders: no preventDefault on 2nd pass
-    var trySubmit = function () {
-      if (typeof pageForm.requestSubmit === 'function' && defaultSubmitBtn) {
-        try { pageForm.requestSubmit(defaultSubmitBtn); return; } catch (_) { /* fallthrough */ }
-      }
-      if (typeof pageForm.requestSubmit === 'function') {
-        try { pageForm.requestSubmit(); return; } catch (_) { /* fallthrough */ }
-      }
-      if (defaultSubmitBtn && typeof defaultSubmitBtn.click === 'function') {
-        defaultSubmitBtn.click();
-      } else {
-        pageForm.submit();
-      }
-    };
-    if (typeof setTimeout !== 'undefined') setTimeout(trySubmit, 0);
-    else trySubmit();
+    pageForm.submit();
   }
 
   if (pageForm && saveBtn) {
-    // -------------------------------------------------------------------------
-    // Primary entry point.  EVERYTHING goes through this click handler.
-    // 1. Ensure TinyMCE content is written to the textarea RIGHT NOW (sync).
-    // 2. Run the duplicate-title guard synchronously — this may show the
-    //    confirm() dialog, and it returns true only if user chose OK OR there
-    //    was no duplicate to begin with.
-    // 3. If and ONLY if guard returned true, trigger the actual form submit.
-    // -------------------------------------------------------------------------
     saveBtn.addEventListener('click', function (e) {
       e.preventDefault();
       e.stopPropagation();
@@ -256,56 +310,26 @@
       var guardPassed = false;
       try {
         guardPassed = !!runDuplicateGuardAndMaybeConfirm();
-      } catch (err) {
+      } catch (_) {
         guardPassed = false;
       }
-      if (!guardPassed) {
-        // User clicked Cancel on the dialog, or guard threw.  Do NOT submit.
-        return;
-      }
+      if (!guardPassed) return;
       commitRealSubmit();
     });
   }
 
   if (pageForm) {
-    // -------------------------------------------------------------------------
-    // Belt-and-suspenders: someone may press Enter in a text field, which
-    // triggers the default submitter without going through saveBtn.click().
-    // In that case, run the guard AGAIN here, and block anything unexpected
-    // that didn't come from commitRealSubmit().
-    // -------------------------------------------------------------------------
-    var submitOk = false; // set true for exactly ONE event — the one we fire ourselves
     pageForm.addEventListener('submit', function (e) {
-      tinymce.triggerSave();
-      if (submitOk) return;  // our own commitRealSubmit — let it through cleanly
-
-      // Any OTHER submit (Enter in a field, script-triggered from elsewhere, etc.)
-      // → re-run guard inline before allowing.  If guard fails, stop it.
       e.preventDefault();
       e.stopPropagation();
+
+      tinymce.triggerSave();
+
       var passed = false;
       try { passed = !!runDuplicateGuardAndMaybeConfirm(); } catch (_) { passed = false; }
       if (!passed) return;
-      submitOk = true;
       commitRealSubmit();
     });
-
-    // We also expose the flag to commitRealSubmit (via closure) so the
-    // single-entry commit path uses the SAME gating:
-    // (replace the no-op var from earlier, used above)
-    (function patchCommitRef() {
-      // The commitRealSubmit function above already calls triggerSave and
-      // then requestSubmit().  When that fires the submit event, submitOk
-      // is still false, so the stop-gap above would preventDefault it.  We
-      // solve this by wrapping commitRealSubmit: flip submitOk → true FIRST,
-      // THEN fire requestSubmit — so the submit handler hits the fast-path
-      // return before preventDefault.
-      var orig = commitRealSubmit;
-      commitRealSubmit = function () {
-        submitOk = true;
-        orig();
-      };
-    })();
   }
 
   // ── Slug auto-generation (new pages only) ─────────────────────────────────

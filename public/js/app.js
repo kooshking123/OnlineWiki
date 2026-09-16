@@ -439,6 +439,84 @@
     tick();
   })();
 
+  // ── Theme switch ──────────────────────────────────────────────────────────
+  (function installThemeSwitch() {
+    const THEME_COOKIE_MAXAGE = 30 * 86400;
+
+    function getCurrentTheme() {
+      const cls = document.documentElement.className || '';
+      const m = cls.match(/theme-(light|dark)/);
+      if (m) return m[1];
+      return (window.__THEME_INITIAL__ === 'dark') ? 'dark' : 'light';
+    }
+
+    function setThemeCookie(theme) {
+      const parts = [
+        'theme=' + encodeURIComponent(theme),
+        'path=/',
+        'SameSite=Lax',
+        'max-age=' + THEME_COOKIE_MAXAGE
+      ];
+      document.cookie = parts.join('; ');
+    }
+
+    function applyThemeUI(theme) {
+      const html = document.documentElement;
+      html.classList.remove('theme-light', 'theme-dark');
+      html.classList.add('theme-' + theme);
+      document.querySelectorAll('.theme-btn').forEach(btn => {
+        const t = btn.getAttribute('data-theme');
+        const active = (t === theme);
+        btn.classList.toggle('theme-btn-active', active);
+        btn.setAttribute('aria-pressed', String(active));
+      });
+    }
+
+    function buildCsrfHeader() {
+      const m = document.querySelector('meta[name="csrf-token"]');
+      if (m && m.content) return { 'x-csrf-token': m.content };
+      return {};
+    }
+
+    function hasTinyMCE() {
+      if (!window.tinymce) return false;
+      if (tinymce.activeEditor) return true;
+      if (tinymce.editors && typeof tinymce.editors.length === 'number' && tinymce.editors.length > 0) return true;
+      if (tinymce.editors && typeof tinymce.editors === 'object' && Object.keys(tinymce.editors).some(function (k) { return tinymce.editors[k] && typeof tinymce.editors[k].id === 'string'; })) return true;
+      return !!document.querySelector('.tox-tinymce, .tox-tinymce-inline, iframe[data-id^="editor-"], textarea.mceEditor');
+    }
+
+    document.querySelectorAll('.theme-btn').forEach(btn => {
+      btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        const theme = btn.getAttribute('data-theme');
+        if (theme !== 'light' && theme !== 'dark') return;
+        const current = getCurrentTheme();
+        if (theme === current) return;
+
+        applyThemeUI(theme);
+        setThemeCookie(theme);
+
+        fetch('/api/theme', {
+          method: 'POST',
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: Object.assign({
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          }, buildCsrfHeader()),
+          body: JSON.stringify({ theme: theme })
+        }).catch(function (err) {
+          console.warn('Theme persist failed:', err);
+        });
+
+        if (hasTinyMCE()) {
+          setTimeout(function () { window.location.reload(); }, 60);
+        }
+      });
+    });
+  })();
+
   // ── Custom tooltip (replaces native title=, positions ABOVE the cursor) ─────
   (function setupTooltips() {
     var tooltip = document.createElement('div');

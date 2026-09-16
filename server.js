@@ -1,6 +1,21 @@
 'use strict';
 require('dotenv').config();
 
+// ─── Legacy-deprecation silencing ─────────────────────────────────────────────
+// connect-flash@0.1.1 (last published 2013-03-15, npm abandoned) pulls in
+//   var isArray = require('util').isArray;
+// at lib/flash.js:5.  Node.js deprecated util.isArray in DEP0044 (Node 10
+// era) and emits a DeprecationWarning on first call.  The runtime
+// implementation of util.isArray is literally:
+//   util.isArray = Array.isArray;
+// so we polyfill the deprecated binding at process startup BEFORE any
+// legacy package is require()d.  This silences the warning with zero
+// behavioral change to any caller.
+const util = require('util');
+if (typeof util.isArray !== 'function' || util.isArray !== Array.isArray) {
+  util.isArray = Array.isArray;
+}
+
 const express        = require('express');
 const session        = require('express-session');
 const FileStore      = require('session-file-store')(session);
@@ -531,6 +546,7 @@ passport.use(new LocalStrategy({
     if (!verifyPassword(password, record.passwordHash)) {
       return done(null, false);
     }
+    if (!record.theme) record.theme = 'light'; // legacy records back-fill
     const now = new Date().toISOString();
     // Use mutex helper (best-effort sync since we're inside callback)
     const update = () => {
@@ -557,12 +573,16 @@ passport.use(new LocalStrategy({
 passport.serializeUser((user, done) => {
   // Local admin path: role is pre-set on the user object
   if (user._localAdmin) {
+    const registry = loadUsers();
+    const rec      = registry[user.username] || {};
     return done(null, {
       username:    user.username,
       displayName: user.displayName,
       email:       '',
       role:        'administrator',
-      _localAdmin: true
+      _localAdmin: true,
+      avatar:      (typeof rec.avatar === 'string') ? rec.avatar : null,
+      theme:       coerceTheme(rec.theme)
     });
   }
   // Local-password-account path: record already has role/displayName/email
@@ -572,7 +592,8 @@ passport.serializeUser((user, done) => {
       displayName: user.displayName || user.username || 'User',
       email:       user.email || '',
       role:        user.role || 'reader',
-      avatar:      user.avatar || null
+      avatar:      user.avatar || null,
+      theme:       coerceTheme(user.theme)
     });
   }
   // LDAP path: pull role from registry
@@ -583,7 +604,9 @@ passport.serializeUser((user, done) => {
     username,
     displayName: user.displayName || user.cn || username || 'User',
     email:       user.mail || '',
-    role:        record ? record.role : 'reader'
+    role:        record ? record.role : 'reader',
+    avatar:      record && (typeof record.avatar === 'string') ? record.avatar : null,
+    theme:       record ? coerceTheme(record.theme) : 'light'
   });
 });
 
@@ -602,20 +625,23 @@ passport.deserializeUser((sessionUser, done) => {
       const avatar     = rec?.avatar || null;
       const displayName = rec?.displayName || sessionUser.displayName;
       const email       = rec?.email || sessionUser.email || '';
-      return done(null, { ...sessionUser, role: 'administrator', displayName, email, avatar });
+      const theme       = coerceTheme(rec?.theme);
+      return done(null, { ...sessionUser, role: 'administrator', displayName, email, avatar, theme });
     } catch {
-      return done(null, { ...sessionUser, role: 'administrator' });
+      return done(null, { ...sessionUser, role: 'administrator', theme: coerceTheme(sessionUser.theme) });
     }
   }
-  // For LDAP/local/hybrid users, refresh role + avatar from the on-disk registry
+  // For LDAP/local/hybrid users, refresh role + avatar + theme from registry.
+  // Falls back to sessionUser.theme (for old sessions after upgrade) then light.
   try {
     const registry = loadUsers();
     const record   = registry[sessionUser.username];
     const role     = record ? record.role : (sessionUser.role || 'reader');
     const avatar   = record ? (record.avatar || null) : null;
-    done(null, { ...sessionUser, role, avatar });
+    const theme    = record ? coerceTheme(record.theme) : coerceTheme(sessionUser.theme);
+    done(null, { ...sessionUser, role, avatar, theme });
   } catch {
-    done(null, { ...sessionUser, role: sessionUser.role || 'reader' });
+    done(null, { ...sessionUser, role: sessionUser.role || 'reader', theme: coerceTheme(sessionUser.theme) });
   }
 });
 
@@ -692,6 +718,7 @@ function flattenForSelect(nodes, depth = 0) {
 // (causing the classic "green bar on wrong page" complaint).
 app.use((req, res, next) => {
   res.locals.user  = req.user || null;
+  res.locals.serverUserTheme = coerceTheme(req.user?.theme);
   res.locals.flash = { error: req.flash('error'), success: req.flash('success'), info: req.flash('info') };
   res.locals.settings = loadSettings();
   res.locals.navFlat  = [];
@@ -1101,6 +1128,19 @@ function loadUsers() {
 function saveUsers(data) {
   writeJsonAtomic(USERS_FILE, data);
 }
+
+/**
+ * Coerce any raw value (from user input / cookies / JSON) into one of the two
+ * allowed theme strings.  Any unknown/missing value falls back to the default
+ * "light" per the user requirement "default theme for all new users will be the
+ * light theme".
+ */
+function coerceTheme(raw) {
+  const s = (typeof raw === 'string' ? raw : '')
+    .trim()
+    .toLowerCase();
+  return (s === 'dark') ? 'dark' : 'light';
+}
 /**
  * Register a new user with role 'reader', or update lastLoginAt for an existing one.
  * Never changes the role on subsequent logins.
@@ -1112,12 +1152,13 @@ function upsertUser({ username, displayName, email }) {
   const apply = () => {
     const registry = loadUsers();
     if (!registry[username]) {
-      registry[username] = { username, displayName, email, role: 'reader', source: 'ldap', registeredAt: now, lastLoginAt: now };
+      registry[username] = { username, displayName, email, role: 'reader', source: 'ldap', registeredAt: now, lastLoginAt: now, theme: 'light' };
     } else {
       registry[username].lastLoginAt  = now;
       registry[username].displayName  = displayName || registry[username].displayName;
       registry[username].email        = email        || registry[username].email;
       if (!registry[username].source) registry[username].source = registry[username].passwordHash ? 'hybrid' : 'ldap';
+      if (!registry[username].theme)  registry[username].theme  = 'light';
     }
     saveUsers(registry);
     return registry[username];
@@ -2497,11 +2538,13 @@ function _updateCurrentUserRecord(username, mutate) {
           role: isEnvAdmin ? 'administrator' : 'reader',
           source: 'local',
           registeredAt: now,
-          lastLoginAt: now
+          lastLoginAt: now,
+          theme: 'light'
         };
         // Guarantee env-admin can never be demoted even if the record already
         // existed with an incorrect role (e.g. legacy data, earlier partial save).
         if (isEnvAdmin) registry[username].role = 'administrator';
+        if (!registry[username].theme) registry[username].theme = 'light';
         mutate(registry[username], registry);
         saveUsers(registry);
         resolve(registry[username]);
@@ -2564,12 +2607,14 @@ app.post('/profile', ensureAuth, async (req, res) => {
     const isEnvAdmin = !!req.user._localAdmin;
     const registry = loadUsers();
     const oldAvatar = (registry[username] || {}).avatar || null;
+    const oldTheme = coerceTheme((registry[username] || {}).theme);
 
     // Display name + email are allowed for all users (self-update)
     let displayName = _plaintextSanitizeAvatar(req.body.displayName || '').slice(0, 80);
     let email = _plaintextSanitizeAvatar(req.body.email || '').slice(0, 254);
     const avatarData = typeof req.body.avatarData === 'string' && req.body.avatarData.startsWith('data:') ? req.body.avatarData : '';
     const clearAvatar = req.body.clearAvatar === '1' || req.body.clearAvatar === 'true';
+    const theme = coerceTheme(req.body.theme || '');
 
     let newAvatar = oldAvatar;
     if (clearAvatar) {
@@ -2584,6 +2629,15 @@ app.post('/profile', ensureAuth, async (req, res) => {
       if (email !== undefined) rec.email = email;
       if (newAvatar !== undefined) rec.avatar = newAvatar;
       if (clearAvatar) delete rec.avatar;
+      rec.theme = theme;
+    });
+
+    req.user.theme = theme;
+    res.cookie('theme', theme, {
+      httpOnly: false,
+      path: '/',
+      sameSite: 'Lax',
+      maxAge: 30 * 86400
     });
 
     auditLogger.info('PROFILE_UPDATED', {
@@ -2591,6 +2645,7 @@ app.post('/profile', ensureAuth, async (req, res) => {
       avatarChanged: !!avatarData || clearAvatar,
       displayNameChanged: displayName && displayName !== (req.user.displayName || ''),
       emailChanged: email !== (req.user.email || ''),
+      themeChanged: oldTheme !== theme ? `${oldTheme} → ${theme}` : null,
       ip: req.ip
     });
 
@@ -2617,6 +2672,43 @@ app.post('/profile/avatar/delete', ensureAuth, async (req, res) => {
     systemLogger.warn('Avatar delete failed', { user: req.user.username, error: e.message });
     req.flash('error', 'Failed to remove avatar.');
     res.redirect('/profile');
+  }
+});
+
+app.post('/api/theme', express.json({ limit: '64kb' }), async (req, res) => {
+  if (!req.isAuthenticated()) {
+    return res.status(401).json({ ok:false, error:'Not authenticated', persisted:false });
+  }
+  try {
+    const theme = coerceTheme(req.body?.theme);
+    const username = req.user.username;
+    const old = coerceTheme(req.user.theme);
+
+    await _updateCurrentUserRecord(username, (rec) => {
+      rec.theme = theme;
+    });
+
+    req.user.theme = theme;
+    res.cookie('theme', theme, {
+      httpOnly: false,
+      path: '/',
+      sameSite: 'Lax',
+      maxAge: 30 * 86400
+    });
+
+    auditLogger.info('PREFERENCE_UPDATED', {
+      username,
+      displayName: req.user.displayName || username,
+      field: 'theme',
+      oldValue: old,
+      newValue: theme,
+      ip: req.ip
+    });
+
+    res.json({ ok: true, theme, persisted: true });
+  } catch (err) {
+    systemLogger.warn('Theme persist failed', { username: req.user?.username, error: err.message });
+    res.status(500).json({ ok: false, error: 'Save failed', theme: coerceTheme(req.body?.theme) });
   }
 });
 
