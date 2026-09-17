@@ -1,26 +1,130 @@
-# Dependencies
+# ─── Dependencies ─────────────────────────────────────────────────────────────
 node_modules/
+.pnp/
+.pnp.js
+.yarn/install-state.gz
 
-# Environment (contains secrets – never commit this)
+# ─── Environment & credentials (MUST NEVER be pushed) ────────────────────────
+# Real runtime environment — contains secrets, TLS paths, session secrets.
 .env
+.env.local
+.env.*.local
+# npm/pnpm token files / yarn berry config with auth tokens
+.npmrc
+.yarnrc.yml
+.pnpmfile.cjs
+# NOTE: PEM-encoded certificates/keys are NEVER committed if they live inside
+# data/ (see the Application data block below, which ignores the entire dir).
+# If you ever store PEMs OUTSIDE data/, add explicit paths here. Do NOT use a
+# global "*.pem" wildcard — that would accidentally drop legitimate test
+# fixtures or CA-bundle files the project intentionally ships.
 
-# Data files (sessions, user registry, pages, uploads – contains secrets/PII)
+# ─── Application data (DATA_DIR / LOG_DIR — user generated, PII, private keys)
+# The wiki replicates this folder via SyncThing between nodes. It contains
+# user accounts, session tokens, page content, uploads, logo images, avatars,
+# self-signed TLS keys for local dev, and winston bookkeeping indices.
+# Everything is node-local or shared via out-of-band sync — NOT via git.
 data/
+# …but keep the scaffolding .gitkeep files so a fresh clone has empty dirs.
 !data/pages/.gitkeep
 !data/uploads/.gitkeep
 !data/sessions/.gitkeep
+!data/logos/.gitkeep
+!data/avatars/.gitkeep
 
-# Test files
+# All logs: winston-daily-rotate-file emits 2 patterns:
+#   • index files:   logs/.{audit,system,...}-audit.json   (bookkeeping)
+#   • rotated files: logs/audit-YYYY-MM-DD.log            (daily rotation)
+# Ignore the whole directory for simplicity — nothing in logs/ is ever part
+# of the shipped source tree. Individual .gitkeep if needed can be excepted.
+logs/
+!logs/.gitkeep
+
+# ─── Test & build artefacts ──────────────────────────────────────────────────
 test_files/
+coverage/
+.nyc_output/
+.cache/
+.parcel-cache/
+.next/
+.nuxt/
+dist/
+build/
 
-# OS artefacts
-.DS_Store
-Thumbs.db
-
-# Logs
+# ─── Logs outside of LOG_DIR (fallback wildcards just in case) ────────────────
+# The "logs/" block above is authoritative; these wildcards cover stray log
+# files written into the repo root during one-off debug scripts.
 *.log
+*.log.*
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+# winston-daily-rotate-file .json indices that somehow ended up outside logs/
+.*-audit.json
+.*-audit.json.*
 
-# Editor
+# ─── Process control / locks ─────────────────────────────────────────────────
+*.pid
+*.seed
+*.pid.lock
+.lock-wscript
+.npm
+.eslintcache
+.stylelintcache
+
+# ─── Editor & IDE (platform-specific) ────────────────────────────────────────
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# ─── macOS / Windows / Linux desktop metadata ────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ─── Node native addon builds ────────────────────────────────────────────────
+build/Release
+build/Debug
+*.node
+gyp-mac-tool
+node-gyp/
+
+# ─── SyncThing local state (not repo-tracked) ────────────────────────────────
+# .stignore IS tracked (it's the project template). The runtime db files are
+# per-node and must never be in git.
+.stfolder
+.stversions
+.stignore.tmp
+.sync-*
+*.sync-conflict-*
+Syncthing*
+
+# ─── Temporary / backup files from editing / scripts ─────────────────────────
+*.bak
+*.tmp
+*.temp
+*.old
+*.orig
+*.patch
+*.diff
+# nodemon / pm2 / forever artefacts
+.pm2/
+.forever/
+nodemon-*.json
