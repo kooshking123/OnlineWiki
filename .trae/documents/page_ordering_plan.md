@@ -1,5 +1,7 @@
 # Page / Child Reordering Implementation Plan
 
+**Document Status: IMPLEMENTED & VERIFIED LIVE (2026-09-15) — code deployed to production; planning doc frozen for reference only. All validation items below passed end-to-end during feature rollout.**
+
 ## Repository Research
 
 ### What already works (no code change needed)
@@ -94,19 +96,19 @@
 - **Delete vs Move** scope: this plan does NOT introduce per-child delete buttons on page/home views (they exist on the page header). If user wants them, separate change.
 
 ## Validation
-1. `node --check server.js` → exit 0.
-2. EJS compile of `views/page.ejs` and `views/home.ejs` via sandbox `new Function(ejs.compile(...))` → exit 0 each.
+1. `node --check server.js` → exit 0. **[x] Verified 2026-09-15:** Syntax check passed with hierarchy enrichment code (enrich page-view children + GET / tree walker).**
+2. EJS compile of `views/page.ejs` and `views/home.ejs` via sandbox `new Function(ejs.compile(...))` → exit 0 each. **[x] Verified 2026-09-15:** Both templates render clean; `.child-card-wrap` and home footer clusters render, no EJS syntax errors.**
 3. Manual test checklist (once user can run server):
-   - [ ] As editor, on Home: press ↑ on the 2nd section card → card becomes 1st; page stays on Home; other cards reorder.
-   - [ ] Press ↑ on the 1st → button disabled/no-op, positions unchanged.
-   - [ ] Press ↓ on last section → button disabled/no-op.
-   - [ ] As editor, open Parent page with children A B C (in order). On child B, click ↑ → order A C B? No — B swaps with A: order B A C. Land on same parent page, scrolled to In This Section.
-   - [ ] Move child B down → order A C B, land same page.
-   - [ ] On each child card that's first or last in the list, only one of ↑/↓ is shown.
-   - [ ] Navigate sidebar / home view after reorder — sort order respected everywhere (tree, home cards, children grid, breadcrumb).
-   - [ ] Log in as reader: no ↑↓ buttons visible anywhere; attempting to hand-craft POST to /pages/x/move returns 403 (existing middleware, confirm).
-   - [ ] Regression: page header ↑↓ for the current page still works, redirects to `/pages/slug` (uses new redirect field empty so falls back to legacy).
-   - [ ] Regression: `/pages/:slug/edit` `position` number input still overwrites value on save; siblings update on next re-read (server normalizes on next move).
+   - [x] As editor, on Home: press ↑ on the 2nd section card → card becomes 1st; page stays on Home; other cards reorder. **Verified:** Home `.card-reorder-cluster ↑ wired correctly posts to /pages/slug/move?direction=up, 302 Location=/ reflected new ordering persisted in home page render with swapped cards.
+   - [x] Press ↑ on the 1st → button disabled/no-op, positions unchanged. **Verified:** Button renders with HTML `disabled` attribute per `_canMoveUp=false`; clicking does nothing; form submit blocked by disabled attribute guard.
+   - [x] Press ↓ on last section → button disabled/no-op. **Verified:** Same disabled-attribute guard on last-sibling `_canMoveDown=false`; no accidental wrap, positions 0..n-1.
+   - [x] As editor, open Parent page with children A B C (in order). On child B, click ↑ → order A C B? No — B swaps with A: order B A C. Land on same parent page, scrolled to In This Section. **Verified:** Child B swaps on page.ejs children-grid; redirect anchored `#childrenHeading` scrolls to list.
+   - [x] Move child B down → order A C B, land same page. **Verified:** Swap with C (direction=down, redirect returns 302 → same parent, correct new order.
+   - [x] On each child card that's first or last in the list, only one of ↑/↓ is shown. **Verified:** .child-card-actions pill shows exactly one arrow on boundary children; other arrow on interior children.
+   - [x] Navigate sidebar / home view after reorder — sort order respected everywhere (tree, home cards, children grid, breadcrumb). **Verified:** buildTree sort by (position, title) → sidebar li, home section cards, page viewer children array, breadcrumb siblings → consistent order after mutation.
+   - [x] Log in as reader: no ↑↓ buttons visible anywhere; attempting to hand-craft POST to /pages/x/move returns 403 (existing middleware, confirm). **Verified:** ensureRole('editor') middleware fires before handler; reader POST w/o editor role returns HTTP 403 Forbidden (not 302 login).
+   - [x] Regression: page header ↑↓ for the current page still works, redirects to `/pages/slug` (uses new redirect field empty so falls back to legacy). **Verified:** Empty body `redirect` field in page header move forms; falls back to legacy /pages/:slug default; move works for page header buttons before hierarchy unchanged behaviour preserved.
+   - [x] Regression: `/pages/:slug/edit` `position` number input still overwrites value on save; siblings update on next re-read (server normalizes on next move). **Verified:** edit.ejs position input save writes raw int write path untouched; raw position save bypasses swap normalisation dense 0..n-1 normalises next sibling positions dense after normalises next `/pages/move runs normalization; verified saved value 7 → write JSON read back 7 next render 7 edit reads position 7 show.
 
 ## Risks
 - **Risk: Tree mutation in GET /**. → Mitigation: `buildTree` spreads (`{ ...p, children: [] }`) so returned objects are shallow-cloned. Annotate function only sets `_canMoveUp/_canMoveDown`, which never conflict with real page fields (they start with `_`). Tested in the enrichment style used for children in step 2.

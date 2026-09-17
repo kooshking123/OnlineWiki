@@ -4,12 +4,18 @@ A lightweight, self-hosted internal collaborative wiki.
 
 ## Features
 
-- 📝 **WYSIWYG editing** — TinyMCE 7 with dark theme, tables, code blocks, and more
-- 🔐 **AD/LDAP authentication** — login with Active Directory credentials via `ldapauth-fork`
-- 📁 **Flat-file storage** — pages saved as JSON in `<DATA_DIR>/pages/` (configurable single sync root), no database required
-- 📎 **Document uploads** — attach PDF, Word, Excel, PowerPoint and other files; download to view
-- 🔍 **Live search** — filter pages and uploads instantly in the browser
-- 🌙 **Premium dark UI** — glassmorphism login, animated sidebar, responsive layout
+- 📝 **WYSIWYG editing** — TinyMCE 7 with light/dark theme skins (oxide / oxide-dark), tables, code blocks, media embed, and more; editor skin and content area match the user's selected UI theme
+- 🔐 **AD/LDAP authentication** — login with Active Directory credentials via `ldapauth-fork`, plus optional local `.env` bootstrap admin account and local-user registry with bcrypt password hashing and role-based access control (reader / editor / administrator)
+- 📁 **Flat-file storage** — pages saved as JSON in `<DATA_DIR>/pages/` (configurable single sync root), no database required; every piece of persistent state lives inside exactly one `DATA_DIR` folder for trivial SyncThing / DFS replication
+- 🎨 **Customizable branding** — administrators can upload a custom site logo (PNG / JPEG / WebP / SVG, max 2 MB) from **Settings → Branding**; shown in the sidebar header (top-left) *and* on the unauthenticated login screen; public `/logos/` route serves the logo without requiring auth. Falls back to a books emoji if unset. Site title, tagline, and home heading/subtitle are also editable via the same admin UI
+- 🌗 **Per-user light/dark theme switch** — every authenticated user self-selects a light or dark UI theme (default = light for all new users). Persisted server-side in the user registry (`users.json[].theme`) + fast-path cookie for FOUC-free 1st paint; TinyMCE editor chrome + content area switch skins synchronously. Login screen uses an independent neutral brand theme (not user theme)
+- 🧱 **Hierarchy restructuring** — editors can promote / demote pages (move up/down a level) and reorder pages among siblings via a 4-button cluster on the page viewer. Cycle guards prevent invalid hierarchies; every mutation updates `updatedAt` and writes an audit event. Home cards and "In This Section" children both expose the same inline reorder controls
+- 🛡️ **Duplicate title guard** — saving a page whose title collides with an existing page shows a synchronous confirmation dialog BEFORE the POST is sent. Server-side `confirmDuplicate=true` gating enforces the same guard on the backend so crafted requests cannot bypass the check. Save buttons use `type="button"` + direct `form.submit()` to eliminate browser async-submit races
+- 📎 **Document uploads** — attach PDF, Word, Excel, PowerPoint and other files; download to view; Quick Media Insert sidebar panel in the editor embeds images or links to files inline
+- 👥 **User Management (admins only)** — `/admin/users` UI to create/delete local users, assign roles (reader/editor/administrator), reset passwords, and upload custom profile avatars. Roles gate: readers = view only; editors = create/edit/delete pages + uploads; administrators = user management + site settings
+- ⚙️ **Site Settings (admins only)** — `/admin/settings` single-form configuration of site title, tagline, home heading/subtitle, custom site logo (upload/remove), registration policy, and more. Stored atomically in `data/settings.json` (no database), changeable via CSFR-safe POST with audit logging
+- 🔍 **Live search** — filter pages and uploads instantly in the browser sidebar (client-side, no network round-trip)
+- 🌙 **Modern UI** — glassmorphism neutral-theme login screen, animated collapsible sidebar, responsive layout, custom JS-rendered tooltips (factually concise, positioned above the cursor; blue action buttons intentionally exclude tooltips per UX policy)
 
 ---
 
@@ -82,8 +88,8 @@ inside Docker images, and per-instance logs are deliberately kept separate.
                ▼                                      ▼
         ┌──── SyncThing directory replicator ─────┐   ← ONE FOLDER: DATA_DIR
         │  syncs:  pages/, uploads/, avatars/,    │          TEMPLATE B
-        │         sessions/*.json, users.json,    │          .stignore at
-        │         settings.json                   │          DATA_DIR/.stignore
+        │         logos/, sessions/*.json,        │          .stignore at
+        │         users.json, settings.json       │          DATA_DIR/.stignore
         │  ignores: sessions/*.tmp, *.lock, logs/ │
         └─────────────────────────────────────────┘
 ```
@@ -117,10 +123,11 @@ OnlineWiki/                              ← application code (ships in the Dock
 │   │                         Bare-metal (abs):  X:\OnlineWiki-Data  /srv/onlinewiki-data
 │   ├── pages/           Each page is one JSON file:  <slug>.json
 │   ├── uploads/         Binary document uploads + image uploads
-│   ├── avatars/         Per-user profile pictures (circular PNG/JPG)
+│   ├── avatars/         Per-user profile pictures (circular PNG/JPG, auth-gated serve route)
+│   ├── logos/           Administrator-uploaded custom site logos (PNG/JPEG/WEBP/SVG, PUBLIC serve route `/logos/` so the unauthenticated login page can render them without a 401. Auto-cleaned on replace/remove)
 │   ├── sessions/        Session files (only *.json are synced; *.tmp / *.lock ignored)
-│   ├── users.json       Local user registry + role map + bcrypt hashes
-│   └── settings.json    Site title, tagline, home heading, registration policy
+│   ├── users.json       Local user registry + role map + bcrypt hashes + per-user theme field: `{ username, passwordHash, displayName, email, role, avatar, theme: "light"|"dark" }`
+│   └── settings.json    Site settings: `{ siteTitle, siteTagline, homeHeading, homeSubtitle, logo: null | "<filename in logos/>.ext" }` (additive schema, no migrations; unknown values are coerced to safe defaults at read time)
 │
 └── <LOG_DIR>/           Per-instance logs — NEVER replicate between servers
                           Docker:  /var/log/onlinewiki
@@ -171,7 +178,7 @@ Environment mapping:
     └──────────────┬─────────────────────────────┘  └──────────────┬─────────────────────────────┘
                    ▼                                               ▼
                 ┌─ SyncThing directory replicator (SINGLE FOLDER: the HOST DATA_DIR, e.g. /data/onlinewiki) ─┐
-                │  · Syncs:  pages/, uploads/, avatars/, sessions/*.json, users.json, settings.json           │
+                │  · Syncs:  pages/, uploads/, avatars/, logos/, sessions/*.json, users.json, settings.json   │
                 │  · Ignores (TEMPLATE B in .stignore, copied INTO DATA_DIR root):                              │
                 │       sessions/*.tmp, sessions/*.tmp.*, sessions/*.lock, logs/, *.log,                       │
                 │       .stfolder/, .stversions/, .DS_Store, Thumbs.db                                         │
@@ -272,13 +279,15 @@ Every logout (manual or idle) writes a `USER_LOGOUT` event to the per-day audit 
 
 ### Page Storage Wire Format
 
-Each page is exactly one file: `<DATA_DIR>/pages/<slug>.json`
+Each page is exactly one file: `<DATA_DIR>/pages/<slug>.json`. All writes use the pattern `write-tmp → fs.renameSync` (atomic rename-on-close) so interrupted writes never leave a partially-written valid JSON file. SyncThing conflict copies (`<slug>.sync-conflict-<ts>-<devId>.json`) are silently filtered out of `listPages()` results.
 
 ```json
 {
   "title": "Getting Started",
   "slug": "getting-started",
-  "content": "<p>HTML from the TinyMCE editor…</p>",
+  "parent": null,
+  "position": 0,
+  "content": "<p>HTML from the TinyMCE editor — sanitized server-side via sanitize-html before write…</p>",
   "tags": ["setup", "onboarding"],
   "author": "jdoe",
   "authorDisplay": "Jane Doe",
@@ -287,6 +296,22 @@ Each page is exactly one file: `<DATA_DIR>/pages/<slug>.json`
   "attachments": ["1725235200000_User_Guide.pdf"]
 }
 ```
+
+Field reference:
+
+| Field | Type | Notes |
+|---|---|---|
+| `title` | string | Human-readable, shown in UI. Need not be unique; duplicate titles trigger the duplicate-title guard (see Admin Guide). |
+| `slug` | string | URL-safe, derived from `title` via `slugify` (lowercase, hyphenated). Must be unique across all pages (enforced server-side on save). |
+| `parent` | `null` \| string | `null` = root-level page. Otherwise = `<parent-slug>` (reference to another page JSON's slug field). |
+| `position` | integer | Dense ordering index within the current parent's children, 0-based. Normalized to dense `0..n-1` on every hierarchy mutation so gaps are transient. Undefined in legacy files → sort treats it as `9999` (end of list). |
+| `content` | string | HTML from TinyMCE; server-sanitized through `sanitize-html` before every write (script tags, event handlers, and off-origin `<iframe>` objects are stripped). |
+| `tags` | string[] | Free-form tags; displayed on cards and searchable (client-side) via the sidebar filter. |
+| `author` | string | Username (LDAP sAMAccountName or local username) of the creator. |
+| `authorDisplay` | string | Friendly display name of the creator (copied at creation time; not auto-updated if user later changes their display name). |
+| `createdAt` | ISO-8601 string | Timestamp of the first save (never changes). |
+| `updatedAt` | ISO-8601 string | Updated on every save, rename, slug change, OR hierarchy mutation (promote/demote/up/down) so reordering shows up correctly in sort-by-recent views. |
+| `attachments` | string[] | Filenames within `<DATA_DIR>/uploads/` referenced by this page; Quick Media Insert in the editor appends to this array, and page-view delete-page cascades a delete of files here. |
 
 ---
 
@@ -536,8 +561,8 @@ via git/robocopy).
 - ❌ `.stfolder/`, `.stversions/`, `.DS_Store`, `Thumbs.db` (SyncThing / OS metadata)
 
 **TEMPLATE B syncs (must carry these):**
-- ✅ `pages/`, `uploads/`, `avatars/`
-- ✅ `users.json`, `settings.json`
+- ✅ `pages/`, `uploads/`, `avatars/`, `logos/` (logos/ is required so every node renders the admin-uploaded custom site logo on the sidebar AND the unauthenticated login screen; the `/logos` serve route is public)
+- ✅ `users.json`, `settings.json` (settings.json carries the `logo` filename pointer that references a file in logos/)
 - ✅ `sessions/*.json` (the final session files — NOT the tmp / lock scratch!)
 
 > **Legacy whole-repo share (not recommended for Docker):** If you run bare-metal
@@ -637,6 +662,122 @@ Session sharing smoke test:
 # In the same browser — reload the page.
 # Expected: still authenticated, served by Server B via LB, no re-login prompt.
 ```
+
+---
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     ADMINISTRATION · Day-to-day operations guide
+     How to use the admin-exclusive features, manage branding, users,
+     theme, hierarchy, and understand the duplicate-title safety model.
+     ═══════════════════════════════════════════════════════════════════════ -->
+
+## Administration & Operations Guide
+
+All tasks in this section require the `administrator` role unless otherwise stated.
+
+### Site Branding (admins only)
+
+Navigate to **Settings → Branding** (`/admin/settings`). All changes take effect immediately and are written atomically to `DATA_DIR/settings.json` (no server restart required; every node picks them up on the next HTTP request via `loadSettings()`).
+
+| Setting | Where it appears | Notes |
+|---|---|---|
+| **Site title** | Sidebar header (next to logo), browser `<title>`, login screen heading, email/notifications | Max 80 characters |
+| **Site tagline** | Login screen subtitle, HTML `<meta name="description">` | Sentence case; shown under the title on login |
+| **Home heading** | Home page top banner | Supports `{N}` placeholder (replaced with total page count) and `{N_S}` (plural "s" when N ≠ 1) |
+| **Home subtitle** | Home page second-line text | Same `{N}` / `{N_S}` placeholders |
+| **Site logo** | Sidebar header (top-left, 28×28 px) + unauthenticated login screen (max 96×80 px) | PNG / JPEG / WebP / SVG (SVG recommended for sharpness on retina). Max 2 MB. Upload replaces the previous file (auto-deleted). Remove reverts to the built-in 📚 books emoji in both locations. The logo file is stored at `<DATA_DIR>/logos/logo-<timestamp>.<ext>` and served publicly via the unauthenticated `/logos/<filename>` route (unlike `/avatars` which is auth-gated — the login page must be able to load it without a session). |
+
+> **SyncThing note for multi-server**: When you upload or remove a logo, SyncThing must replicate BOTH the `logos/` directory contents AND the `settings.json` pointer file. If you see a broken-image 404 on one node, wait for SyncThing to converge (usually a few seconds) — the TEMPLATE B `.stignore` is pre-configured to sync both locations correctly.
+
+### Theme System
+
+Two themes are available plus a standalone login theme:
+
+| Context | Theme | Scope | How to change |
+|---|---|---|---|
+| **Authenticated pages** (sidebar, home, page view/edit, profile, admin) | `light` or `dark`, per-user | Users self-select; default = `light` for all new users | Topbar sun/moon selector (left of user chip) **or** My Profile → Preferences → Theme radio swatches |
+| **Login screen** (unauthenticated) | `neutral` (blue/purple brand gradient, slate-900 text, white card) | Hard-coded, identical for all visitors | Cannot be changed by users; deliberately decoupled so a user with `dark` theme selected does not "leak" their preference to the shared kiosk login screen |
+
+**Technical implementation notes:**
+- Persisted server-side in `users.json[<username>].theme` (string, `"light"` \| `"dark"` — any other value coerces to `"light"` at read time).
+- Fast-path non-HttpOnly 30-day `theme` cookie written on every change/save so an inline script in `<head>` (before CSS) sets `html.theme-*` **before the first paint**, eliminating FOUC.
+- If a user changes theme on a page that has TinyMCE 7 editor open, a `hasTinyMCE()` helper detects the editor's presence and triggers a 60 ms delayed page reload — TinyMCE cannot hot-swap skins at runtime, so a reload is required to re-initialize the correct `oxide` / `oxide-dark` skin + `default` / `dark` content_css pair. Pages without TinyMCE (Home, profile, Settings, page viewer) update instantly without reload.
+- Legacy users who have no `theme` field in their record are treated as `light` at deserialization (no data migration script needed; lazily back-filled on first profile write or theme switch).
+
+### User Management (admins only)
+
+Open **User Management** in the sidebar (`/admin/users`).
+
+| Action | How |
+|---|---|
+| **Create local user** | "Create user" blue button → fill username, display name, email (optional), password, role (reader / editor / administrator). BCrypt hash is written at save time. |
+| **Edit / reset password** | Click a user row → edit fields + new password (blank = leave unchanged). Password is re-hashed only when a non-empty value is submitted. |
+| **Change role** | Reader = view only; Editor = create/edit/delete pages, upload files, reorder hierarchy; Administrator = all of the above + user management + site settings. Roles take effect on the next request (no logout needed). |
+| **Delete user** | Red trash button → confirmation. LDAP-mapped users can still log back in and re-create their record via the LDAP upsert flow; purely-local users are gone permanently. |
+| **Upload profile avatar** | Users themselves (not admins) manage avatars from **My Profile** → avatar card. PNG/JPG circular crop, max 2 MB, stored auth-gated at `<DATA_DIR>/avatars/<user>-<timestamp>.<ext>`. |
+
+### Hierarchy & Page Reordering (editors+; admins inherit)
+
+Every page in the wiki lives in a tree: root pages (top-level) have `parent: null`; child pages store `parent: "<parent-slug>"`. Siblings at each level are ordered by their integer `position` field (dense 0..n-1; normalized on every move operation so gaps never persist).
+
+**Four affordances on the page viewer header (reorder cluster, always visible; invalid actions disabled and greyed out, never hidden):**
+
+| Button | Action | Disabled when |
+|---|---|---|
+| **← Promote** | Move this page up one level (its parent becomes its grandparent; `parent = oldParent.parent`) | Already a root page (`parent: null`) — cannot go higher |
+| **→ Demote** | Move this page down one level, becoming the last child of its **current preceding sibling** | No preceding sibling (it's the first child of its parent) OR preceding sibling has cycle risk — cycle guard on server prevents creating loops |
+| **↑ Up** | Swap `position` with the preceding sibling among its current parent's children | First child of its level (`position: 0`) |
+| **↓ Down** | Swap `position` with the next sibling among its current parent's children | Last child of its level (`position = siblings.length - 1`) |
+
+**Additional inline reorder locations:** Home page top-level cards expose ↑↓ in the card footer; "In This Section" child cards on the page viewer expose ↑↓ on hover. All mutations go through `POST /pages/:slug/move` behind `ensureRole('editor')` with CSRF tokens and an optional same-origin `redirect` body field so the user lands back on the same scroll anchor they started from.
+
+Every hierarchy mutation:
+1. Updates the page's `updatedAt` timestamp.
+2. Detects and refuses cycles (e.g. demoting a page into one of its own descendants).
+3. Writes a `PAGE_UPDATED` audit event with `{ hierarchyChanged: true, action: promote\|demote\|up\|down }` to the daily audit log.
+
+### Duplicate-Title Save Guard (for editors / admins)
+
+When saving a page (new or edit) whose **title** collides with another page (different slug), the following layered guard runs to prevent accidental overwrites:
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  LAYER 1 · Client-side synchronous gate (editor.js)                │
+│  Save button uses type="button" (NOT type="submit") — browsers do  │
+│  not fire the async HTML-form-submission algorithm at all. The     │
+│  click handler does e.preventDefault() then:                       │
+│    1. tinymce.triggerSave() → copies editor content into <textarea>│
+│    2. Builds a duplicate-check request, or uses inline list if     │
+│       available                                                    │
+│    3. window.confirm("Another page already has this title…") —     │
+│       100% synchronous blocking; nothing proceeds until user       │
+│       clicks OK / Cancel                                            │
+│    4. Only if user confirms OK → raw pageForm.submit() (NOT        │
+│       requestSubmit; no submit event fires; no racing listeners)   │
+│       with confirmDuplicate=true embedded in the POST body         │
+├────────────────────────────────────────────────────────────────────┤
+│  LAYER 2 · Server-side enforcement (server.js POST /pages/save)    │
+│  If the incoming POST has a duplicate title:                       │
+│    a. confirmDuplicate === "true" → save proceeds (user OKed it)   │
+│    b. confirmDuplicate is missing / any other value → the save is  │
+│       REFUSED, and the edit form is RE-RENDERED INLINE (NOT a      │
+│       302 redirect) so the user's entire TinyMCE draft + all form  │
+│       fields are preserved (no data loss) with a flash error.      │
+│  This second layer means hand-crafted POSTs / browser-LANG edits   │
+│  cannot bypass the check even if the client JS is tampered with.   │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Silent Deprecation Warnings (ops note)
+
+`connect-flash@0.1.1` (abandoned upstream, 2013) captures a reference to the Node.js core `util.isArray` API at `require` time. In modern Node (20+), this triggers a `DEP0044` deprecation warning once per process startup. To keep logs noise-free without upgrading the package (it would break the flash-messaging contract used across all templates), `server.js` applies a one-line monkey-patch at lines 4–17 (immediately after `dotenv` is loaded, BEFORE any `require` of `connect-flash` or middleware that depends on it):
+
+```js
+const util = require('util');
+if (!util.isArray) util.isArray = Array.isArray;
+```
+
+Behavior is mathematically identical (`Array.isArray` is the modern replacement the deprecation message recommends); no flash messages are affected. If you ever upgrade to a maintained fork of `connect-flash` (or replace it), you can safely delete those 3 lines.
 
 ---
 
