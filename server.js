@@ -17,6 +17,8 @@ if (typeof util.isArray !== 'function' || util.isArray !== Array.isArray) {
 }
 
 const express        = require('express');
+const https          = require('https');
+const http           = require('http');
 const session        = require('express-session');
 const FileStore      = require('session-file-store')(session);
 let   RedisStore     = null;
@@ -245,6 +247,35 @@ function verifyCsrfConstantTime(req) {
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
+// ─── HTTPS / TLS (optional) ─────────────────────────────────────────────────
+// HTTP is always enabled on PORT.  A second HTTPS listener on HTTPS_PORT is
+// started only when BOTH SSL_CERT_PATH and SSL_KEY_PATH point to PEM files.
+// When HTTPS is active AND HTTPS_REDIRECT_HTTP=true, the HTTP listener
+// answers GET/HEAD requests with a 301 redirect to the HTTPS equivalent.
+function _resolveTlsPath(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const v = raw.trim();
+  if (!v) return null;
+  return path.isAbsolute(v) ? v : path.resolve(process.cwd(), v);
+}
+const HTTPS_PORT         = parseInt(process.env.HTTPS_PORT) || 3443;
+const SSL_CERT_ABS       = _resolveTlsPath(process.env.SSL_CERT_PATH);
+const SSL_KEY_ABS        = _resolveTlsPath(process.env.SSL_KEY_PATH);
+const SSL_CA_ABS         = _resolveTlsPath(process.env.SSL_CA_PATH);
+const HTTPS_REDIRECT_ALL = process.env.HTTPS_REDIRECT_HTTP === 'true';
+let   HTTPS_ENABLED      = false;
+try {
+  HTTPS_ENABLED = !!(SSL_CERT_ABS && SSL_KEY_ABS && fs.existsSync(SSL_CERT_ABS) && fs.existsSync(SSL_KEY_ABS));
+} catch { HTTPS_ENABLED = false; }
+if (SSL_CERT_ABS || SSL_KEY_ABS) {
+  if (!HTTPS_ENABLED) {
+    systemLogger.warn('[tls] SSL_CERT_PATH or SSL_KEY_PATH is set but the referenced PEM file(s) do not exist — falling back to HTTP-only.');
+  } else {
+    systemLogger.info(`[tls] PEM certificate material loaded; HTTPS listener will bind to port ${HTTPS_PORT}.`);
+    if (SSL_CA_ABS && fs.existsSync(SSL_CA_ABS)) systemLogger.info(`[tls] Additional CA bundle attached: ${SSL_CA_ABS}.`);
+  }
+}
+
 // ─── Consolidated persistent storage root ──────────────────────────────────────
 // All shared state (pages, uploads, avatars, sessions, users.json, settings.json)
 // lives under DATA_DIR — the single folder that SyncThing (or DFS-N / SMB / NFS)
@@ -341,6 +372,32 @@ app.use(express.static(PUBLIC_DIR));
 app.use(helmet({
   contentSecurityPolicy: false  // Disabled: TinyMCE requires unsafe-inline + unsafe-eval
 }));
+// ─── HTTP → HTTPS 301 upgrade redirect (optional) ──────────────────────────
+// When HTTPS_ENABLED && HTTPS_REDIRECT_ALL === true, any plaintext
+// (non-TLS) GET/HEAD request carrying a Host header is rewritten
+// into a 301 redirect pointing to the HTTPS listener.  All other
+// methods (POST/PUT/etc) are NOT redirect-safe because browsers drop
+// the body across a 30x.  Trusted proxies that terminate TLS and
+// forward X-Forwarded-Proto are handled by setting trust proxy below.
+app.use((req, res, next) => {
+  if (!HTTPS_ENABLED || !HTTPS_REDIRECT_ALL) return next();
+  const isAlreadySecure = req.secure || !!req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https';
+  if (isAlreadySecure) return next();
+  const host = req.headers.host;
+  if (!host) return next();
+  const method = (req.method || 'GET').toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD') return next();
+  const colonIdx = host.lastIndexOf(':');
+  const hostOnly = colonIdx > 0 ? host.slice(0, colonIdx) : host;
+  const httpsHost = (HTTPS_PORT === 443) ? hostOnly : `${hostOnly}:${HTTPS_PORT}`;
+  const target = `https://${httpsHost}${req.originalUrl || req.url}`;
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  res.redirect(301, target);
+});
+// Enable trust proxy AFTER the upgrade gate so upgrades are evaluated
+// using the raw socket protocol first; proxied HTTPS can still honour
+// req.secure for downstream cookie/CSRF logic that depends on it.
+app.set('trust proxy', ['loopback', 'linklocal', 'uniquelocal', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']);
 // HTTP request logging via morgan → winston stream
 app.use(morgan('combined', {
   stream: { write: msg => systemLogger.http(msg.trim()) },
@@ -2901,15 +2958,88 @@ app.use((err, req, res, _next) => {
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  systemLogger.info(`OnlineWiki started`, {
-    port: PORT,
-    env: process.env.NODE_ENV || 'development',
+// Build both servers up-front (http always exists; https only when the PEM
+// files resolve).  Then bring each listener online and emit a single
+// combined startup banner that lists every reachable URL.
+const httpServer = http.createServer(app);
+let   httpsServer = null;
+if (HTTPS_ENABLED) {
+  try {
+    const tlsOpts = {
+      cert: fs.readFileSync(SSL_CERT_ABS, 'utf8'),
+      key:  fs.readFileSync(SSL_KEY_ABS,  'utf8'),
+    };
+    if (SSL_CA_ABS && fs.existsSync(SSL_CA_ABS)) {
+      const caRaw = fs.readFileSync(SSL_CA_ABS, 'utf8');
+      // Split a single concatenated bundle into an array of per-cert PEMs
+      // — the TLS stack accepts a ca: [] array for the chain.
+      const caSplit = caRaw
+        .split(/(?=-----BEGIN CERTIFICATE-----)/g)
+        .map(s => s.trim())
+        .filter(Boolean);
+      tlsOpts.ca = caSplit.length ? caSplit : caRaw;
+    }
+    httpsServer = https.createServer(tlsOpts, app);
+  } catch (tlsErr) {
+    systemLogger.error('[tls] Failed to build HTTPS TLS context — continuing in HTTP-only mode.', { error: tlsErr.message });
+    console.error(`\n⚠️  TLS init error: ${tlsErr.message}. HTTP only.\n`);
+    httpsServer = null;
+    HTTPS_ENABLED = false;
+  }
+}
+
+const startedServers = [];
+function emitStartupBanner() {
+  const envName = process.env.NODE_ENV || 'development';
+  systemLogger.info('OnlineWiki started', {
+    ports: startedServers.map(s => `${s.proto}:${s.port}`),
+    env: envName,
     dataDir: DATA_DIR_ABS,
     logDir:  LOGS_DIR_ABS,
   });
-  console.log(`\n📚 OnlineWiki running at http://localhost:${PORT}`);
-  console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`\n📚 OnlineWiki started — ${startedServers.map(s => s.proto.toUpperCase()).join(' + ')}`);
+  console.log(`   Environment: ${envName}`);
   console.log(`   Persistent data (DATA_DIR=${DATA_DIR}): ${DATA_DIR_ABS}`);
-  console.log(`   Local logs        (LOG_DIR =${LOGS_DIR}):  ${LOGS_DIR_ABS}\n`);
+  console.log(`   Local logs        (LOG_DIR =${LOGS_DIR}):  ${LOGS_DIR_ABS}`);
+  startedServers.forEach(s => {
+    console.log(`   • ${s.proto}://localhost:${s.port}`);
+  });
+  if (HTTPS_ENABLED && HTTPS_REDIRECT_ALL) {
+    console.log(`   ℹ️  HTTP GET/HEAD requests auto-upgrade to HTTPS (301, HSTS set).`);
+  }
+  console.log('');
+}
+
+httpServer.listen(PORT, () => {
+  startedServers.push({ proto: 'http', port: PORT });
+  if (httpsServer) {
+    httpsServer.listen(HTTPS_PORT, () => {
+      startedServers.push({ proto: 'https', port: HTTPS_PORT });
+      emitStartupBanner();
+    }).on('error', (httpsErr) => {
+      systemLogger.error('[tls] HTTPS listener failed to bind', { port: HTTPS_PORT, error: httpsErr.message });
+      console.error(`\n⚠️  HTTPS port ${HTTPS_PORT} bind failed: ${httpsErr.message}. Running HTTP-only.\n`);
+      emitStartupBanner();
+    });
+  } else {
+    emitStartupBanner();
+  }
+}).on('error', (httpErr) => {
+  systemLogger.error('HTTP listener failed to bind', { port: PORT, error: httpErr.message });
+  console.error(`\n❌ HTTP port ${PORT} bind failed: ${httpErr.message}. Exiting.\n`);
+  process.exit(1);
 });
+
+// Graceful shutdown: close servers first then flush logs.
+function shutdownGracefully(signal) {
+  systemLogger.info(`Received ${signal} — draining active requests.`);
+  const closers = [];
+  if (httpServer && httpServer.listening) closers.push(cb => httpServer.close(cb));
+  if (httpsServer && httpsServer.listening) closers.push(cb => httpsServer.close(cb));
+  let pending = closers.length || 1;
+  const done = () => { if (--pending <= 0) setTimeout(() => process.exit(0), 400); };
+  if (!closers.length) done();
+  closers.forEach(close => close(done));
+}
+process.on('SIGTERM', () => shutdownGracefully('SIGTERM'));
+process.on('SIGINT',  () => shutdownGracefully('SIGINT'));

@@ -779,6 +779,128 @@ if (!util.isArray) util.isArray = Array.isArray;
 
 Behavior is mathematically identical (`Array.isArray` is the modern replacement the deprecation message recommends); no flash messages are affected. If you ever upgrade to a maintained fork of `connect-flash` (or replace it), you can safely delete those 3 lines.
 
+### HTTP + HTTPS Dual-Stack & TLS Setup
+
+OnlineWiki supports **three deployment modes** — pick the one that matches your network topology. HTTPS is OPTIONAL; HTTP is always enabled and is the default if no PEM paths are set.
+
+| Mode | When to use | How to configure |
+|---|---|---|
+| **HTTP only (default)** | Dev; or behind a TLS-terminating reverse proxy (nginx / Caddy / AWS ALB / Cloudflare). | Leave all `SSL_*` vars unset. HTTP listener on `PORT` (default 3000). Let the upstream proxy terminate TLS and forward plain HTTP to the wiki — `app.set('trust proxy', ['loopback','linklocal','uniquelocal','10.0.0.0/8','172.16.0.0/12','192.168.0.0/16'])` is pre-configured so session `Secure` cookies (in `NODE_ENV=production`), `req.secure`, and the redirect logic correctly see proxied-HTTPS as secure via `X-Forwarded-Proto` + `X-Forwarded-Host` from the fronting load balancer. |
+| **Dual HTTP + HTTPS listeners** | Bare-metal or direct-access production where the wiki itself terminates TLS (no fronting proxy). | Set both `SSL_CERT_PATH` AND `SSL_KEY_PATH` to PEM file paths (absolute or relative to `process.cwd()`; relative paths are resolved by `server.js:_resolveTlsPath()`). The wiki starts **two listeners** on the same Express app: one plain HTTP on `PORT` (default 3000), one TLS on `HTTPS_PORT` (default 3443). |
+| **HTTPS-only (redirect)** | Dual-stack mode but you want every accidental plaintext click to jump to HTTPS. | Add `HTTPS_REDIRECT_HTTP=true` (default: `false`). Safe HTTP methods **GET/HEAD** arriving on the plaintext listener that carry a `Host` header are rewritten into a **301 Moved Permanently** redirect to `https://<host>:<HTTPS_PORT><path>` with a `Strict-Transport-Security: max-age=31536000; includeSubDomains` response header. POST/PUT/PATCH bodies are never redirected (browsers drop bodies across 30x); send forms over the canonical HTTPS URL. |
+
+**Typical port combinations**:
+
+| Scenario | `PORT` | `HTTPS_PORT` | Notes |
+|---|---|---|---|
+| Local dev / non-admin run | 3000 | 3443 | Non-privileged ports, works on Windows/macOS/Linux user accounts with no elevation. |
+| Bare-metal production (direct) | 80 | 443 | Run the process with `CAP_NET_BIND_SERVICE` on Linux, or a Windows service account with `SeSecurityPrivilege` for low-port bind. |
+| Behind nginx / ALB / CF | 3000 | *(unset)* | Proxy terminates TLS; upstream forwards plain HTTP. The wiki doesn't even load the TLS codepath (no `https` require overhead when `SSL_*` blank). |
+
+---
+
+#### Linux / Let's Encrypt (certbot) — Ubuntu/Debian bare-metal
+
+DNS record `wiki.example.com` → public IP of the server; port 80 reachable from the internet for the standalone HTTP-01 challenge.
+
+```bash
+# 1. Issue or renew a certificate (standalone mode). Post-renewal hook should restart
+#    the wiki systemd unit so the node process re-reads the rotated PEM files.
+sudo certbot certonly --standalone -d wiki.example.com \
+  --deploy-hook "systemctl restart onlinewiki.service"
+
+# 2. Copy into a location the wiki service account can read (letsencrypt live dir
+#    is root-only by default — don't chown the /etc/letsencrypt hierarchy itself).
+sudo install -d -m 755 /etc/ssl/private /etc/ssl/certs
+sudo install -m 600 -o wiki -g wiki \
+  /etc/letsencrypt/live/wiki.example.com/privkey.pem  /etc/ssl/private/wiki-onlinewiki-key.pem
+sudo install -m 644 -o wiki -g wiki \
+  /etc/letsencrypt/live/wiki.example.com/fullchain.pem /etc/ssl/certs/wiki-onlinewiki-fullchain.pem
+```
+
+…then in `.env`:
+
+```dotenv
+PORT=80
+HTTPS_PORT=443
+SSL_CERT_PATH=/etc/ssl/certs/wiki-onlinewiki-fullchain.pem
+SSL_KEY_PATH=/etc/ssl/private/wiki-onlinewiki-key.pem
+HTTPS_REDIRECT_HTTP=true
+# Optional: extra private-CA intermediate chain
+# SSL_CA_PATH=/usr/local/share/ca-certificates/corp-intermediate.crt
+```
+
+If you use a private internal CA whose root isn't in the Mozilla store, bundle the intermediate(s) into a single PEM file and set `SSL_CA_PATH` so Node's TLS stack advertises the full chain to clients.
+
+---
+
+#### Windows local dev — self-signed SAN cert (the setup applied to this repo's `.env`)
+
+OpenSSL ships with **Git for Windows** at `C:\Program Files\Git\usr\bin\openssl.exe`. A standalone OpenSSL installer (`C:\Program Files\OpenSSL-Win64\bin\openssl.exe`) or Chocolatey `choco install openssl.light` also work. The one-liner below uses an inline SAN config because older Git-OpenSSL builds don't support the `-addext` CLI flag:
+
+```powershell
+# Create an OpenSSL config that declares DNS:localhost + both loopback IPs, then sign.
+@'
+[ req ]
+default_bits       = 2048
+distinguished_name = dn
+x509_extensions    = v3_ca
+prompt             = no
+[ dn ]
+CN = localhost
+O  = OnlineWiki Local Dev
+C  = US
+[ v3_ca ]
+basicConstraints = CA:FALSE
+keyUsage         = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName   = @alt
+[ alt ]
+DNS.1 = localhost
+DNS.2 = localhost.localdomain
+IP.1  = 127.0.0.1
+IP.2  = ::1
+'@ | Set-Content data\dev-tls-openssl.cnf -Encoding ASCII
+
+& 'C:\Program Files\Git\usr\bin\openssl.exe' req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes `
+  -config data\dev-tls-openssl.cnf -extensions v3_ca `
+  -keyout data\dev-tls-key.pem -out data\dev-tls-cert.pem
+```
+
+Verify the 4 SANs actually embedded (Chrome/Edge require at least one matching SAN; a bare `CN=` no longer counts):
+
+```powershell
+& 'C:\Program Files\Git\usr\bin\openssl.exe' x509 -in data\dev-tls-cert.pem -noout -ext subjectAltName
+# → X509v3 Subject Alternative Name:
+#      DNS:localhost, DNS:localhost.localdomain, IP Address:127.0.0.1, IP Address:0:0:0:0:0:0:0:1
+```
+
+…then the matching `.env` block (already applied in this repo):
+
+```dotenv
+PORT=3000
+HTTPS_PORT=3443
+SSL_CERT_PATH=data/dev-tls-cert.pem
+SSL_KEY_PATH=data/dev-tls-key.pem
+HTTPS_REDIRECT_HTTP=false
+```
+
+**Trusting the self-signed cert on this Windows PC (admin once)**. If you want a real green lock instead of the "Not Secure" warning, double-click `data\dev-tls-cert.pem` in Explorer → **Certificate → Install Certificate → Local Machine → Next → Place all certificates in the following store → Browse → Trusted Root Certification Authorities → OK → Next → Finish → "The import was successful"**. Close and re-open Chrome/Edge. Navigate to `https://localhost:3443/` → the lock icon will now show a valid "Issued to: localhost" cert.
+
+> ⚠️ **Multi-server / SyncThing caveat for local-dev certs**: if you set `DATA_DIR=data` and SyncThing replicates it, **add `data/dev-tls-*.pem` and `data/dev-tls-openssl.cnf` to the `.stignore` of every SyncThing node**. Each machine must have its *own* self-signed cert/key pair — sharing the same private key across hosts is a bad security habit and will break host-name matching when the cert's SANs bind to localhost only. Production certs (with public DNS names) obtained from a real CA, in contrast, SHOULD be synced so every frontend on the cluster advertises the same chain.
+
+---
+
+#### Graceful shutdown & signal handling
+
+`SIGTERM` / `SIGINT` ([server.js:3033–3045](file:///C:/Users/leeda/OneDrive/Dev/Trae/OnlineWiki/server.js#L3033-L3045)) call `.close()` on both the HTTP and HTTPS listeners in parallel so no new TCP accepts are opened, wait for in-flight requests to drain up to Node's default keep-alive window, then give the winston file-transport 400 ms to flush its final audit-line to disk before exiting. This matches the contract that `systemd stop` / `docker stop` / Kubernetes `terminationGracePeriodSeconds` rely on: no log line is lost, and no `502 Bad Gateway` leaks through the load balancer during rolling restarts. On Windows, `Ctrl+C` at the console issues a `SIGINT` and triggers the same drain path.
+
+| Signal | Source | Behaviour |
+|---|---|---|
+| `SIGINT`  | `Ctrl+C` (any OS terminal) | Graceful close both servers + flush → exit 0 |
+| `SIGTERM` | systemd, Docker stop, kubelet 1.20+ | Same drain as SIGINT → exit 0 |
+| `SIGKILL` | `kill -9` / taskkill /F | Hard kill; last 400 ms of log lines may be lost (never use for normal restarts). |
+
 ---
 
 <!-- ═══════════════════════════════════════════════════════════════════════
@@ -792,9 +914,15 @@ All variables are read from `.env` at startup. For multi-server deployments, var
 | Variable | Default | Scope | Type | Description |
 |---|---|---|---|---|
 | **Runtime** | | | | |
-| `NODE_ENV` | `development` | SHARED | string | `development` or `production` (affects error-page verbosity, Helmet settings) |
-| `LOG_LEVEL` | `info` | PER-NODE | string | Winston log level: `error` / `warn` / `info` / `http` / `debug` |
-| `PORT` | `3000` | PER-NODE | int | HTTP listen port. In Docker the container-internal port stays 3000; map externally via `-p 80:3000`. |
+| `NODE_ENV` | `development` | SHARED | string | `development` or `production`. In `production`: session cookies flip to `Secure` (over HTTPS/X-Forwarded-Proto), error pages drop stack traces, and static assets get 1d `Cache-Control: immutable`. |
+| `LOG_LEVEL` | `info` | PER-NODE | enum | Winston log level: `error` (failures only) / `warn` (potential issues) / `info` (startup + mutations) / **`http` (every request URL + status)** / `debug` (CSRF tokens, session lookups, route resolution). Use `http` during TLS debug to see both plain and TLS listeners' request lines hit the audit stream. |
+| `PORT` | `3000` | PER-NODE | int | Plaintext HTTP listen port. Always binds even when HTTPS is configured. In Docker keep container-internal port 3000 and publish via `-p 80:3000 -p 443:3443`. |
+| **TLS / HTTPS (optional dual-stack, all PER-NODE)** | | | | |
+| `HTTPS_PORT` | `3443` | PER-NODE | int | TLS listener port. **Ignored completely** unless *both* `SSL_CERT_PATH` and `SSL_KEY_PATH` are set AND the PEM files exist on disk. Use 443 on a bare-metal server; use 3443 when running as an unprivileged account (Windows non-admin, Linux without `CAP_NET_BIND_SERVICE`). |
+| `SSL_CERT_PATH` | *(not set)* | PER-NODE | path | Absolute or **relative to `process.cwd()`** path to the PEM-encoded **full certificate chain** (Let's Encrypt `fullchain.pem`, a Windows exported `.cer` with chain, or the public part of a self-signed cert). Resolution happens in `server.js:_resolveTlsPath()`; relative paths are normalised via `path.resolve(process.cwd(), value)` early at boot. |
+| `SSL_KEY_PATH` | *(not set)* | PER-NODE | path | Matching PEM-encoded **private key** (Let's Encrypt `privkey.pem`, a Windows-exported `.pvk` converted to PEM, or a self-signed key). Linux: **chmod 600** and own the file with the same UID that runs the wiki process. Windows: use NTFS ACLs so only Administrators + the service account can read it (the default ACL on `data\` already grants Admin-only write + user read; tighten via Properties → Security → Advanced if needed). |
+| `SSL_CA_PATH` | *(not set)* | PER-NODE | path | Optional. Single concatenated PEM bundle of one-or-more additional **intermediate / root CAs** to attach to the Node TLS context. Automatically split on `-----BEGIN CERTIFICATE-----` boundaries and passed as `tls.createServer({ ca: [...] })` so multi-cert chains parse correctly regardless of blank-line separators in the bundle. Required only when a) you use a private internal CA whose root isn't in the default Mozilla store clients use, OR b) your leaf cert's issuer chain is longer than what fullchain.pem already contains. |
+| `HTTPS_REDIRECT_HTTP` | `false` | PER-NODE | bool | `false` = **dev-friendly dual-stack**: both `http://<host>:<PORT>` and `https://<host>:<HTTPS_PORT>` serve the wiki independently, useful when one browser tab still has the plain HTTP bookmark and another is testing TLS. `true` = **production-like strict redirect**: plaintext **GET/HEAD** requests that carry a `Host` header are rewritten to **301 Moved Permanently → `https://<host-without-plain-port>:<HTTPS_PORT><path>`** + response emits `Strict-Transport-Security: max-age=31536000; includeSubDomains` so browsers pin to HTTPS for 1 year. **Body-carrying methods (POST/PUT/PATCH/DELETE) are NEVER redirected** — browsers drop the body across 30x; direct those requests at the canonical HTTPS URL or behind a TLS-terminating proxy that does the upgrade at layer 7. |
 | **Storage** | | | | |
 | `DATA_DIR` | Docker: `/var/lib/onlinewiki`<br>Bare-metal: `data` | SHARED* | path | ONE single persistent-storage root folder. SyncThing replicates ONLY this directory. *Container-side value identical on every node; host-side bind-mount source can vary by node. |
 | `LOG_DIR` | Docker: `/var/log/onlinewiki`<br>Bare-metal: `logs` | PER-NODE | path | Per-instance system + audit logs. **NEVER sync this directory** between servers. |
