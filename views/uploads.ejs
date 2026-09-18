@@ -1,14 +1,27 @@
 <!-- Header -->
 <div class="view-header">
   <div class="view-header-left">
-    <nav class="breadcrumb" aria-label="Breadcrumb">
-      <a href="/">Home</a>
-      <span class="breadcrumb-sep" aria-hidden="true">/</span>
-      <span aria-current="page">Documents</span>
+    <nav class="breadcrumb uploads-breadcrumb" aria-label="Breadcrumb">
+      <% breadcrumb.forEach((crumb, i) => { %>
+        <% if (i > 0) { %><span class="breadcrumb-sep" aria-hidden="true">/</span><% } %>
+        <% if (i === breadcrumb.length - 1) { %>
+          <span aria-current="page"><%= crumb.name %></span>
+        <% } else { %>
+          <a href="/uploads<%= crumb.path ? '?path=' + encodeURIComponent(crumb.path) : '' %>"><%= crumb.name %></a>
+        <% } %>
+      <% }); %>
     </nav>
     <h1 class="view-title">Documents</h1>
     <p class="view-subtitle">
-      <%= files.length %> file<%= files.length !== 1 ? 's' : '' %> stored
+      <%= subfolders.length %> folder<%= subfolders.length !== 1 ? 's' : '' %>,
+      <%= files.length %> file<%= files.length !== 1 ? 's' : '' %>
+      <% if (currentFolderPath) { %> in “<%= currentFolderPath.split('/').pop() %>”<% } %>
+      <% if (typeof orphanFileCount === 'number' && orphanFileCount > 0) { %>
+        · <span class="orphan-count-badge" data-tooltip="Files on disk without a matching uploads.json index record. Click “Track” or “Adopt All” below to register them.">⚠ <%= orphanFileCount %> untracked</span>
+      <% } %>
+      <% if (typeof danglingRecordCount === 'number' && danglingRecordCount > 0) { %>
+        · <span class="dangling-count-badge" data-tooltip="Upload records whose file is missing from disk. These will 404 when referenced on pages. Remove to clean up.">🗑️ <%= danglingRecordCount %> dangling</span>
+      <% } %>
     </p>
   </div>
 </div>
@@ -16,14 +29,42 @@
 <%
   const _userRole = (user && typeof user.role === 'string') ? user.role : '';
   const _isEditorOrBetter = _userRole === 'editor' || _userRole === 'administrator';
+  const _disabledReadonly = _isEditorOrBetter ? '' : 'disabled';
+  const _pathQs = currentFolderPath ? '?path=' + encodeURIComponent(currentFolderPath) : '';
+  const _hasOrphans   = (typeof orphanFileCount   === 'number' && orphanFileCount   > 0);
+  const _hasDangling  = (typeof danglingRecordCount === 'number' && danglingRecordCount > 0);
 %>
+
+<% if (_isEditorOrBetter && (_hasOrphans || _hasDangling)) { %>
+<div class="orphan-callout" role="alert" aria-live="polite">
+  <% if (_hasOrphans) { %>
+    <div class="orphan-callout-item orphan-callout-warn">
+      <span class="orphan-callout-icon" aria-hidden="true">⚠</span>
+      <div class="orphan-callout-body">
+        <strong><%= orphanFileCount %> untracked file<%= orphanFileCount !== 1 ? 's' : '' %></strong>
+        <span class="orphan-callout-sub">on disk without an uploads.json index record.</span>
+      </div>
+    </div>
+  <% } %>
+  <% if (_hasDangling) { %>
+    <div class="orphan-callout-item orphan-callout-danger">
+      <span class="orphan-callout-icon" aria-hidden="true">🗑️</span>
+      <div class="orphan-callout-body">
+        <strong><%= danglingRecordCount %> dangling record<%= danglingRecordCount !== 1 ? 's' : '' %></strong>
+        <span class="orphan-callout-sub">in uploads.json with no matching file on disk. Referenced pages will 404.</span>
+      </div>
+    </div>
+  <% } %>
+</div>
+<% } %>
 
 <% if (_isEditorOrBetter) { %>
 <!-- ─── Upload drop zone (editor + administrator only) ──────────────────── -->
 <section class="upload-zone-section" aria-labelledby="uploadHeading">
   <h2 class="upload-zone-heading" id="uploadHeading">Upload a Document</h2>
-  <form action="/uploads" method="POST" enctype="multipart/form-data" id="uploadForm">
+  <form action="/uploads/upload" method="POST" enctype="multipart/form-data" id="uploadForm">
     <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+    <input type="hidden" name="folderPath" id="uploadFolderPath" value="<%= currentFolderPath || '' %>" />
     <div class="drop-zone" id="dropZone" tabindex="0" role="button" aria-label="Click or drag files here to upload" data-tooltip="Drag & drop files here, or click Choose File below to select one from your device.">
       <div class="drop-zone-inner">
         <div class="drop-zone-icon" aria-hidden="true">
@@ -50,7 +91,7 @@
       </div>
     </div>
     <div id="uploadActions" class="upload-actions">
-      <button type="submit" class="btn btn-primary" id="uploadBtn">
+      <button type="button" class="btn btn-primary" id="uploadBtn" data-form="uploadForm">
         <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         Upload File
       </button>
@@ -59,54 +100,152 @@
 </section>
 <% } %>
 
-<!-- ─── File list ─────────────────────────────────────────────────────────── -->
+<!-- ─── Toolbar + file/folder list ────────────────────────────────────────── -->
 <section class="files-section" aria-labelledby="filesHeading">
   <div class="files-section-header">
-    <h2 class="files-section-title" id="filesHeading">Uploaded Files</h2>
-    <% if (files.length > 0) { %>
+    <h2 class="files-section-title" id="filesHeading">Contents</h2>
+    <div class="uploads-toolbar">
+      <% if (_isEditorOrBetter) { %>
+        <button type="button" class="btn btn-sm btn-secondary" id="newFolderBtn" data-tooltip="Create a new subfolder in the current location.">
+          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+          New Folder
+        </button>
+      <% } else { %>
+        <button type="button" class="btn btn-sm btn-secondary" disabled data-tooltip="Readers cannot create folders.">
+          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+          New Folder
+        </button>
+      <% } %>
+      <% if (_isEditorOrBetter) { %>
+        <button type="button" class="btn btn-sm btn-primary" id="moveSelectedBtn" disabled>
+          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+          Move
+          <span class="badge-muted" id="moveCountBadge" hidden>0</span>
+        </button>
+        <button
+          type="button"
+          class="btn btn-sm btn-secondary"
+          id="adoptAllBtn"
+          <% if (!_hasOrphans) { %>disabled data-tooltip="No untracked files in this folder to adopt."<% } else { %>data-tooltip="Create uploads.json records for ALL untracked files in the current folder using their disk metadata."<% } %>
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+          Adopt All
+        </button>
+        <button
+          type="button"
+          class="btn btn-sm btn-secondary"
+          id="pruneDanglingBtn"
+          <% if (!_hasDangling) { %>disabled data-tooltip="No dangling records in this folder to remove."<% } else { %>data-tooltip="Remove ALL dangling upload records from the current folder (records with no file on disk)."<% } %>
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+          Prune Dangling
+        </button>
+        <button
+          type="button"
+          class="btn btn-sm btn-danger"
+          id="pruneDanglingGlobalBtn"
+          data-tooltip="Remove ALL dangling upload records across ALL folders (global cleanup of records missing on disk)."
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 0 0 6.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 0 0 6.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3"/></svg>
+          Global Prune Dangling
+        </button>
+      <% } else { %>
+        <button type="button" class="btn btn-sm btn-primary" disabled>
+          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+          Move
+        </button>
+      <% } %>
       <div class="files-search-wrap">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input type="search" id="fileSearch" class="files-search-input" placeholder="Search files…" aria-label="Search files" />
+        <input type="search" id="fileSearch" class="files-search-input" placeholder="Search items…" aria-label="Search items" />
       </div>
-    <% } %>
+    </div>
   </div>
 
-  <% if (files.length === 0) { %>
+  <% if (subfolders.length === 0 && files.length === 0) { %>
     <div class="empty-state">
       <div class="empty-state-icon" aria-hidden="true">📁</div>
-      <h3 class="empty-state-title">No files yet</h3>
-      <p class="empty-state-text"><%= _isEditorOrBetter ? 'Use the upload area above to add documents.' : 'No documents have been uploaded yet.' %></p>
+      <h3 class="empty-state-title">This folder is empty</h3>
+      <p class="empty-state-text"><%= _isEditorOrBetter ? 'Use the upload area above to add documents, or click New Folder.' : 'No items here yet.' %></p>
     </div>
   <% } else { %>
     <div class="files-table-wrap">
-      <table class="files-table" id="filesTable" aria-label="Uploaded files">
+      <table class="files-table uploads-table" id="filesTable" aria-label="Uploads contents">
         <thead>
           <tr>
-            <th scope="col">File</th>
+            <th scope="col" class="col-checkbox"><span class="visually-hidden">Select</span></th>
+            <th scope="col">Name</th>
             <th scope="col">Size</th>
-            <th scope="col">Uploaded</th>
+            <th scope="col">Modified</th>
             <th scope="col" class="col-actions">Actions</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="folderRowsTbody" class="folder-rows-section">
+          <% subfolders.forEach(sf => { %>
+            <tr class="folder-row" data-search-val="<%= sf.name.toLowerCase() %> folder" data-folder-rel="<%= sf.rel %>">
+              <td class="col-checkbox"></td>
+              <td class="folder-name-cell">
+                <span class="file-type-icon folder-icon" aria-hidden="true">📁</span>
+                <div class="file-name-info">
+                  <a href="/uploads?path=<%= encodeURIComponent(sf.rel) %>" class="folder-link" data-tooltip="Open “<%= sf.name %>”."><%= sf.name %></a>
+                </div>
+              </td>
+              <td class="file-size-cell">—</td>
+              <td class="file-date-cell">—</td>
+              <td class="file-actions-cell folder-actions-cell">
+                <% if (_isEditorOrBetter) { %>
+                  <button type="button" class="btn btn-sm btn-secondary rename-folder-btn" data-rel="<%= sf.rel %>" data-name="<%= sf.name %>" data-tooltip="Rename this folder.">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    Rename
+                  </button>
+                  <button type="button" class="btn btn-sm btn-danger delete-folder-btn" data-rel="<%= sf.rel %>" data-name="<%= sf.name %>" data-tooltip="Delete this folder (only possible when empty).">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                    Delete
+                  </button>
+                <% } else { %>
+                  <button type="button" class="btn btn-sm btn-secondary" disabled data-tooltip="Readers cannot rename folders.">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    Rename
+                  </button>
+                  <button type="button" class="btn btn-sm btn-danger" disabled data-tooltip="Readers cannot delete folders.">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                    Delete
+                  </button>
+                <% } %>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+        <tbody id="fileRowsTbody" class="file-rows-section">
           <% files.forEach(f => { %>
-            <tr class="file-row" data-search-val="<%= f.originalName.toLowerCase() %>">
+            <tr class="file-row<%= f.orphan ? ' file-row-orphan' : '' %>" data-search-val="<%= f.originalName.toLowerCase() %> <%= f.storedName.toLowerCase() %>" data-rel-path="<%= f.relPath %>" data-is-orphan="<%= f.orphan ? '1' : '0' %>">
+              <td class="col-checkbox">
+                <% if (_isEditorOrBetter && !f.orphan) { %>
+                  <input type="checkbox" class="file-row-checkbox" value="<%= f.relPath %>" aria-label="Select <%= f.originalName %> for moving" />
+                <% } else if (f.orphan) { %>
+                  <input type="checkbox" disabled aria-label="Orphan files cannot be moved" />
+                <% } else { %>
+                  <input type="checkbox" disabled aria-label="Readers cannot select files" />
+                <% } %>
+              </td>
               <td class="file-name-cell">
                 <span class="file-type-icon" aria-hidden="true"><%= f.icon %></span>
                 <div class="file-name-info">
-                  <span class="file-display-name" data-tooltip="<%= f.originalName %>"><%= f.originalName %></span>
+                  <span class="file-display-name" data-tooltip="<%= f.originalName %><%= f.orphan ? ' (Untracked: no uploads.json record found. Use Adopt to track or Delete to remove.)' : '' %>">
+                    <%= f.orphan ? '<span class="orphan-icon" title="Untracked file — no uploads.json record. Use Adopt or Delete below.">⚠</span> ' : '' %><%= f.originalName %>
+                  </span>
                   <span class="file-ext-badge"><%= f.ext %></span>
                 </div>
               </td>
               <td class="file-size-cell"><%= f.size %></td>
               <td class="file-date-cell">
-                <time datetime="<%= f.uploadedAt.toISOString() %>">
+                <time datetime="<%= f.uploadedAt %>">
                   <%= new Date(f.uploadedAt).toLocaleDateString(undefined, {dateStyle:'medium'}) %>
                 </time>
               </td>
               <td class="file-actions-cell">
                 <a
-                  href="/uploads/download/<%= f.name %>"
+                  href="/uploads/<%= encodeURIComponent(f.relPath) %>?download=1"
                   class="btn btn-sm btn-secondary"
                   download="<%= f.originalName %>"
                   aria-label="Download <%= f.originalName %>"
@@ -114,32 +253,161 @@
                   <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   Download
                 </a>
-                <% if (_isEditorOrBetter) { %>
-                <button
-                  class="btn btn-sm btn-danger delete-file-btn"
-                  data-filename="<%= f.name %>"
-                  data-displayname="<%= f.originalName %>"
-                  aria-label="Delete <%= f.originalName %>"
-                  data-tooltip="Delete “<%= f.originalName %>” from the library (removes it from any pages it is attached to)."
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-                  Delete
-                </button>
+                <% if (_isEditorOrBetter && !f.orphan) { %>
+                  <button
+                    class="btn btn-sm btn-danger delete-file-btn"
+                    data-filename="<%= f.storedName %>"
+                    data-displayname="<%= f.originalName %>"
+                    data-rel-path="<%= f.relPath %>"
+                    aria-label="Delete <%= f.originalName %>"
+                    data-tooltip="Delete “<%= f.originalName %>” from the library (removes it from any pages it is attached to)."
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                    Delete
+                  </button>
+                <% } else if (_isEditorOrBetter && f.orphan) { %>
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-secondary adopt-file-btn"
+                    data-rel-path="<%= f.relPath %>"
+                    data-displayname="<%= f.originalName %>"
+                    data-tooltip="Create an uploads.json record for this untracked file using its disk metadata."
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+                    Adopt
+                  </button>
+                  <button
+                    class="btn btn-sm btn-danger delete-file-btn"
+                    data-filename="<%= f.storedName %>"
+                    data-displayname="<%= f.originalName %>"
+                    data-rel-path="<%= f.relPath %>"
+                    aria-label="Delete untracked file <%= f.originalName %>"
+                    data-tooltip="Delete this untracked file from disk permanently."
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                    Delete
+                  </button>
+                <% } else { %>
+                  <button class="btn btn-sm btn-danger" disabled data-tooltip="Readers cannot delete files.">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                    Delete
+                  </button>
                 <% } %>
               </td>
             </tr>
           <% }); %>
         </tbody>
+        <% if (_isEditorOrBetter && typeof danglingRecords !== 'undefined' && danglingRecords && danglingRecords.length > 0) { %>
+        <tbody id="danglingRowsTbody" class="dangling-rows-section">
+          <tr class="dangling-section-header-row">
+            <td colspan="5" class="dangling-section-header">
+              <span class="dangling-section-icon" aria-hidden="true">🗑️</span>
+              <span class="dangling-section-title">Dangling Upload Records (no file on disk)</span>
+              <span class="dangling-section-count"><%= danglingRecords.length %> item<%= danglingRecords.length !== 1 ? 's' : '' %></span>
+            </td>
+          </tr>
+          <% danglingRecords.forEach(dr => { %>
+            <tr class="file-row file-row-dangling" data-search-val="<%= dr.originalName.toLowerCase() %> <%= dr.storedName.toLowerCase() %> dangling" data-rel-path="<%= dr.relPath %>" data-is-dangling="1">
+              <td class="col-checkbox">
+                <input type="checkbox" disabled aria-label="Dangling records cannot be moved." />
+              </td>
+              <td class="file-name-cell">
+                <span class="file-type-icon" aria-hidden="true"><%= dr.icon %></span>
+                <div class="file-name-info">
+                  <span class="file-display-name" data-tooltip="Dangling record: <%= dr.originalName %> — no matching file on disk at the time of listing. Referenced pages will 404.">
+                    <span class="dangling-icon" title="Dangling upload record — no matching file found on disk.">🗑️</span> <%= dr.originalName %>
+                    <span class="dangling-label">Dangling</span>
+                  </span>
+                  <span class="file-ext-badge"><%= dr.ext %></span>
+                </div>
+              </td>
+              <td class="file-size-cell"><%= dr.size %></td>
+              <td class="file-date-cell">
+                <time datetime="<%= dr.uploadedAt %>">
+                  <%= new Date(dr.uploadedAt).toLocaleDateString(undefined, {dateStyle:'medium'}) %>
+                </time>
+              </td>
+              <td class="file-actions-cell">
+                <button
+                  class="btn btn-sm btn-secondary"
+                  disabled
+                  data-tooltip="No file on disk to download."
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Download
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-danger remove-dangling-btn"
+                  data-rel-path="<%= dr.relPath %>"
+                  data-displayname="<%= dr.originalName %>"
+                  data-tooltip="Remove this dangling upload record from uploads.json (no file to delete on disk)."
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  Remove Record
+                </button>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+        <% } %>
       </table>
     </div>
     <div class="empty-state hidden" id="noFileResults" aria-live="polite">
       <div class="empty-state-icon" aria-hidden="true">🔍</div>
-      <p class="empty-state-text">No files match your search.</p>
+      <p class="empty-state-text">No items match your search.</p>
     </div>
   <% } %>
 </section>
 
 <% if (_isEditorOrBetter) { %>
+<!-- ═══ New Folder / Rename Folder hidden forms ════════════════════════════ -->
+<form method="POST" action="/uploads/folders/create" id="newFolderForm" class="hidden">
+  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+  <input type="hidden" name="parentPath" id="newFolderParentPath" value="" />
+  <input type="hidden" name="name" id="newFolderName" value="" />
+  <input type="hidden" name="redirect" value="/uploads<%= _pathQs %>" />
+</form>
+<form method="POST" action="/uploads/folders/rename" id="renameFolderForm" class="hidden">
+  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+  <input type="hidden" name="path" id="renameFolderPath" value="" />
+  <input type="hidden" name="name" id="renameFolderNewName" value="" />
+  <input type="hidden" name="redirect" value="/uploads<%= _pathQs %>" />
+</form>
+<form method="POST" action="/uploads/folders/delete" id="deleteFolderForm" class="hidden">
+  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+  <input type="hidden" name="path" id="deleteFolderPath" value="" />
+  <input type="hidden" name="redirect" value="/uploads<%= _pathQs %>" />
+</form>
+<form method="POST" action="/uploads/files/move" id="moveFilesForm" class="hidden">
+  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+  <input type="hidden" name="destinationPath" id="moveDestinationPath" value="" />
+  <input type="hidden" name="redirect" value="/uploads<%= _pathQs %>" />
+</form>
+
+<form method="POST" id="adoptFileForm" class="hidden">
+  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+  <input type="hidden" name="redirect" value="/uploads<%= _pathQs %>" />
+</form>
+
+<form method="POST" action="/uploads/adopt-all" id="adoptAllForm" class="hidden">
+  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+  <input type="hidden" name="path" id="adoptAllPath" value="<%= currentFolderPath || '' %>" />
+  <input type="hidden" name="redirect" value="/uploads<%= _pathQs %>" />
+</form>
+
+<form method="POST" action="/uploads/dangling/remove" id="removeDanglingForm" class="hidden">
+  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+  <input type="hidden" name="relPath" id="removeDanglingRelPath" value="" />
+  <input type="hidden" name="redirect" value="/uploads<%= _pathQs %>" />
+</form>
+
+<form method="POST" action="/uploads/dangling/prune" id="pruneDanglingForm" class="hidden">
+  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+  <input type="hidden" name="path" id="pruneDanglingPath" value="" />
+  <input type="hidden" name="redirect" value="/uploads<%= _pathQs %>" />
+</form>
+
 <!-- ═══ Delete file modal (editor + administrator only) ════════════════════ -->
 <div class="modal-overlay hidden" id="deleteFileModal" role="dialog" aria-modal="true" aria-labelledby="deleteFileModalTitle">
   <div class="modal">
@@ -152,134 +420,431 @@
       This will also remove it from any pages it's attached to.
     </p>
     <div class="modal-actions">
-      <button class="btn btn-ghost" id="cancelDeleteFileBtn" data-tooltip="Keep the file and close this confirmation dialog.">Cancel</button>
+      <button type="button" class="btn btn-ghost" id="cancelDeleteFileBtn" data-tooltip="Keep the file and close this confirmation dialog.">Cancel</button>
       <form id="deleteFileForm" method="POST" style="margin:0">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-        <button type="submit" class="btn btn-danger" data-tooltip="Permanently delete this file from the library (cannot be undone).">Delete File</button>
+        <input type="hidden" name="redirect" value="/uploads<%= _pathQs %>" />
+        <button type="button" class="btn btn-danger" id="confirmDeleteFileBtn" data-tooltip="Permanently delete this file from the library (cannot be undone).">Delete File</button>
       </form>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Folder-Picker Modal (for Move operation) ════════════════════════════ -->
+<div class="modal-overlay hidden" id="folderPickerModal" role="dialog" aria-modal="true" aria-labelledby="folderPickerModalTitle">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h2 class="modal-title" id="folderPickerModalTitle">Choose destination folder</h2>
+      <button type="button" class="modal-close-btn" id="closeFolderPickerBtn" aria-label="Close dialog">&times;</button>
+    </div>
+    <p class="modal-body modal-body-sm">
+      Files will be moved into the selected folder. Folders shown are only those physically on disk.
+    </p>
+    <div class="folder-tree" id="folderTreeRoot" role="tree" aria-label="Folder hierarchy"></div>
+    <div class="folder-picker-selected" aria-live="polite">
+      Selection: <code id="selectedFolderDisplay">(root)</code>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="cancelFolderPickerBtn">Cancel</button>
+      <button type="button" class="btn btn-primary" id="confirmFolderPickerBtn" disabled>Move files here</button>
     </div>
   </div>
 </div>
 <% } %>
 
 <script>
-  // ── File search (all users) ────────────────────────────────────────────────
-  const fileSearch = document.getElementById('fileSearch');
-  if (fileSearch) {
-    fileSearch.addEventListener('input', function () {
-      const q = this.value.toLowerCase();
-      let visible = 0;
-      document.querySelectorAll('.file-row').forEach(row => {
-        const match = !q || row.dataset.searchVal.includes(q);
-        row.classList.toggle('hidden', !match);
-        if (match) visible++;
-      });
-      document.getElementById('noFileResults').classList.toggle('hidden', visible > 0);
-    });
-  }
+  (function () {
+    'use strict';
 
-  // ── Drop zone + upload form (editor + administrator only) ──────────────────
-  const dropZone      = document.getElementById('dropZone');
-  if (dropZone) {
-    const fileInput     = document.getElementById('fileInput');
-    const dropText      = document.getElementById('dropZoneText');
-    const selectedBanner = document.getElementById('fileSelectedBanner');
-    const selectedName  = document.getElementById('selectedFileName');
-    const clearBtn      = document.getElementById('clearFileBtn');
-    const uploadActions = document.getElementById('uploadActions');
+    // ─── Page state injected by server ────────────────────────────────────────
+    const CURRENT_FOLDER_PATH = <%- JSON.stringify(currentFolderPath) %>;
+    const USER_CAN_EDIT       = <%- _isEditorOrBetter ? 'true' : 'false' %>;
 
-    function setFile(file) {
-      if (!file) return;
-      selectedName.textContent = file.name;
-      selectedBanner.classList.remove('hidden');
-      uploadActions.classList.remove('hidden');
-      dropZone.classList.add('drop-zone-has-file');
-    }
-
-    function clearFile() {
-      fileInput.value = '';
-      selectedBanner.classList.add('hidden');
-      uploadActions.classList.add('hidden');
-      dropZone.classList.remove('drop-zone-has-file');
-      dropText.textContent = 'Drag & drop files here';
-    }
-
-    fileInput.addEventListener('change', () => {
-      if (fileInput.files[0]) setFile(fileInput.files[0]);
-    });
-    clearBtn.addEventListener('click', clearFile);
-
-    ['dragover','dragenter'].forEach(ev => dropZone.addEventListener(ev, e => {
-      e.preventDefault(); dropZone.classList.add('drop-zone-drag');
-    }));
-    ['dragleave','drop'].forEach(ev => dropZone.addEventListener(ev, e => {
-      e.preventDefault(); dropZone.classList.remove('drop-zone-drag');
-    }));
-    dropZone.addEventListener('drop', e => {
-      const f = e.dataTransfer.files[0];
-      if (f) {
-        const dt = new DataTransfer();
-        dt.items.add(f);
-        fileInput.files = dt.files;
-        setFile(f);
-      }
-    });
-    dropZone.addEventListener('keydown', e => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
-    });
-
-    // ── Upload form submit guard ────────────────────────────────────────────
-    const uploadForm = document.getElementById('uploadForm');
+    // ── Upload form: hidden folderPath + type=button submit ───────────────────
+    const uploadFolderPathEl = document.getElementById('uploadFolderPath');
+    if (uploadFolderPathEl) uploadFolderPathEl.value = CURRENT_FOLDER_PATH || '';
     const uploadBtn = document.getElementById('uploadBtn');
-    if (uploadForm && uploadBtn) {
-      uploadForm.addEventListener('submit', function (e) {
-        if (this.dataset.submitting === '1') { e.preventDefault(); return; }
-        const f = fileInput.files?.[0];
+    if (uploadBtn) {
+      uploadBtn.addEventListener('click', function () {
+        const fid = this.getAttribute('data-form');
+        const form = fid ? document.getElementById(fid) : this.closest('form');
+        if (!form) return;
+        if (form.dataset.submitting === '1') return;
+        const fileInput = document.getElementById('fileInput');
+        const dropText = document.getElementById('dropZoneText');
+        const dropZone = document.getElementById('dropZone');
+        const f = fileInput && fileInput.files ? fileInput.files[0] : null;
         if (!f) {
-          e.preventDefault();
-          dropText.textContent = 'Select a file first, then click Upload.';
-          dropZone.classList.add('drop-zone-error');
-          setTimeout(() => { dropZone.classList.remove('drop-zone-error'); }, 1200);
+          if (dropText) dropText.textContent = 'Select a file first, then click Upload.';
+          if (dropZone) { dropZone.classList.add('drop-zone-error'); setTimeout(()=>dropZone.classList.remove('drop-zone-error'), 1200); }
           return;
         }
-        if (f.size > 50 * 1024 * 1024) {
-          e.preventDefault();
-          alert('File too large. Maximum size is 50 MB.');
-          return;
-        }
-        this.dataset.submitting = '1';
+        if (f.size > 50 * 1024 * 1024) { alert('File too large. Maximum size is 50 MB.'); return; }
+        form.dataset.submitting = '1';
         uploadBtn.disabled = true;
         uploadBtn.classList.add('is-loading');
         if (uploadBtn.firstChild && uploadBtn.firstChild.nodeType === 1) uploadBtn.firstChild.style.opacity = '0.5';
+        form.submit();
       });
     }
-  }
 
-  // ── Delete file modal wiring (editor + administrator only) ─────────────────
-  const deleteFileModal   = document.getElementById('deleteFileModal');
-  if (deleteFileModal) {
-    const cancelDeleteFileBtn = document.getElementById('cancelDeleteFileBtn');
-
-    function openDeleteModal(filename, displayName) {
-      document.getElementById('deleteFileDisplayName').textContent = displayName;
-      document.getElementById('deleteFileForm').action = `/uploads/delete/${encodeURIComponent(filename)}`;
-      deleteFileModal.classList.remove('hidden');
-      cancelDeleteFileBtn.focus();
+    // ── Drop zone + file selection (editor only) ──────────────────────────────
+    const dropZone = document.getElementById('dropZone');
+    if (dropZone && USER_CAN_EDIT) {
+      const fileInput       = document.getElementById('fileInput');
+      const dropText        = document.getElementById('dropZoneText');
+      const selectedBanner  = document.getElementById('fileSelectedBanner');
+      const selectedName    = document.getElementById('selectedFileName');
+      const clearBtn        = document.getElementById('clearFileBtn');
+      const uploadActions   = document.getElementById('uploadActions');
+      function setFile(file) {
+        if (!file) return;
+        selectedName.textContent = file.name;
+        selectedBanner.classList.remove('hidden');
+        uploadActions.classList.remove('hidden');
+        dropZone.classList.add('drop-zone-has-file');
+      }
+      function clearFile() {
+        fileInput.value = '';
+        selectedBanner.classList.add('hidden');
+        uploadActions.classList.add('hidden');
+        dropZone.classList.remove('drop-zone-has-file');
+        dropText.textContent = 'Drag & drop files here';
+      }
+      fileInput && fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
+      clearBtn && clearBtn.addEventListener('click', clearFile);
+      ['dragover','dragenter'].forEach(ev => dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.add('drop-zone-drag'); }));
+      ['dragleave','drop'].forEach(ev => dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.remove('drop-zone-drag'); }));
+      dropZone.addEventListener('drop', e => {
+        const f = e.dataTransfer.files[0];
+        if (f) {
+          const dt = new DataTransfer();
+          dt.items.add(f);
+          fileInput.files = dt.files;
+          setFile(f);
+        }
+      });
+      dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } });
     }
 
+    // ── Search (all users) ────────────────────────────────────────────────────
+    const fileSearch = document.getElementById('fileSearch');
+    if (fileSearch) {
+      fileSearch.addEventListener('input', function () {
+        const q = this.value.toLowerCase();
+        let visible = 0;
+        const folderRows = document.querySelectorAll('#folderRowsTbody .folder-row');
+        const fileRows   = document.querySelectorAll('#fileRowsTbody .file-row');
+        const dangRows   = document.querySelectorAll('#danglingRowsTbody tr.file-row-dangling');
+        const dangHeader = document.querySelector('#danglingRowsTbody tr.dangling-section-header-row');
+
+        folderRows.forEach(row => {
+          const hay = (row.dataset.searchVal || '') + ' ';
+          const match = !q || hay.includes(q);
+          row.classList.toggle('hidden', !match);
+          if (match) visible++;
+        });
+        fileRows.forEach(row => {
+          const hay = (row.dataset.searchVal || '') + ' ';
+          const match = !q || hay.includes(q);
+          row.classList.toggle('hidden', !match);
+          if (match) visible++;
+        });
+        let danglingVisible = 0;
+        dangRows.forEach(row => {
+          const hay = (row.dataset.searchVal || '') + ' ';
+          const match = !q || hay.includes(q);
+          row.classList.toggle('hidden', !match);
+          if (match) { danglingVisible++; visible++; }
+        });
+        if (dangHeader) dangHeader.classList.toggle('hidden', danglingVisible === 0);
+
+        const empty = document.getElementById('noFileResults');
+        if (empty) empty.classList.toggle('hidden', visible > 0);
+      });
+    }
+
+    if (!USER_CAN_EDIT) return; // remaining interactions are editor-only
+
+    // ── Toolbar: New Folder ───────────────────────────────────────────────────
+    const newFolderBtn = document.getElementById('newFolderBtn');
+    if (newFolderBtn) {
+      newFolderBtn.addEventListener('click', function () {
+        const name = window.prompt('New folder name (1–100 letters/numbers/dots/underscores/hyphens/spaces):', '');
+        if (name === null) return;
+        const trimmed = name.trim();
+        if (!trimmed) return;
+        const f = document.getElementById('newFolderForm');
+        if (!f) return;
+        document.getElementById('newFolderParentPath').value = CURRENT_FOLDER_PATH || '';
+        document.getElementById('newFolderName').value = trimmed;
+        f.submit();
+      });
+    }
+
+    // ── Toolbar: Move selected (checkbox count → dis/enable) ──────────────────
+    const moveBtn = document.getElementById('moveSelectedBtn');
+    const moveBadge = document.getElementById('moveCountBadge');
+    function refreshMoveButtonState() {
+      if (!moveBtn) return;
+      const checked = Array.from(document.querySelectorAll('input.file-row-checkbox:checked'));
+      const count = checked.length;
+      moveBtn.disabled = count === 0;
+      if (moveBadge) {
+        moveBadge.textContent = String(count);
+        moveBadge.hidden = count === 0;
+      }
+    }
+    document.addEventListener('change', e => {
+      if (!e.target.classList || !e.target.classList.contains('file-row-checkbox')) return;
+      refreshMoveButtonState();
+    });
+    refreshMoveButtonState();
+
+    // ── Folder row action buttons ─────────────────────────────────────────────
     document.addEventListener('click', e => {
-      const btn = e.target.closest('.delete-file-btn');
-      if (!btn) return;
-      e.preventDefault();
-      openDeleteModal(btn.dataset.filename || '', btn.dataset.displayname || '');
+      const renameBtn = e.target.closest('.rename-folder-btn');
+      if (renameBtn) {
+        e.preventDefault();
+        const oldName = renameBtn.dataset.name || '';
+        const rel = renameBtn.dataset.rel || '';
+        const next = window.prompt(`Rename folder "${oldName}" to:`, oldName);
+        if (next === null) return;
+        const trimmed = next.trim();
+        if (!trimmed || trimmed === oldName) return;
+        document.getElementById('renameFolderPath').value = rel;
+        document.getElementById('renameFolderNewName').value = trimmed;
+        document.getElementById('renameFolderForm').submit();
+        return;
+      }
+      const delBtn = e.target.closest('.delete-folder-btn');
+      if (delBtn) {
+        e.preventDefault();
+        const name = delBtn.dataset.name || '';
+        const rel = delBtn.dataset.rel || '';
+        const ok = window.confirm(`Delete folder "${name}"?\n\nThis is only allowed when the folder is completely empty.`);
+        if (!ok) return;
+        document.getElementById('deleteFolderPath').value = rel;
+        document.getElementById('deleteFolderForm').submit();
+        return;
+      }
     });
 
-    cancelDeleteFileBtn.addEventListener('click', () => deleteFileModal.classList.add('hidden'));
-    deleteFileModal.addEventListener('click', e => {
-      if (e.target === deleteFileModal) deleteFileModal.classList.add('hidden');
+    // ── Delete file modal wiring ──────────────────────────────────────────────
+    const deleteFileModal = document.getElementById('deleteFileModal');
+    if (deleteFileModal) {
+      let pendingAction = null;
+      function openDeleteModal(filename, displayName, relPath) {
+        document.getElementById('deleteFileDisplayName').textContent = displayName;
+        const targetPath = (relPath && relPath.length > 0) ? relPath : filename;
+        const parts = targetPath.split('/');
+        const safe = parts.map(encodeURIComponent).join('/');
+        document.getElementById('deleteFileForm').action = `/uploads/delete/${safe}`;
+        pendingAction = relPath || filename;
+        deleteFileModal.classList.remove('hidden');
+        document.getElementById('cancelDeleteFileBtn').focus();
+      }
+      document.addEventListener('click', e => {
+        const btn = e.target.closest('.delete-file-btn');
+        if (!btn) return;
+        e.preventDefault();
+        openDeleteModal(btn.dataset.filename || '', btn.dataset.displayname || '', btn.dataset.relPath || '');
+      });
+      document.getElementById('cancelDeleteFileBtn').addEventListener('click', () => deleteFileModal.classList.add('hidden'));
+      document.getElementById('confirmDeleteFileBtn').addEventListener('click', () => {
+        const form = document.getElementById('deleteFileForm');
+        if (form) form.submit();
+      });
+      deleteFileModal.addEventListener('click', e => { if (e.target === deleteFileModal) deleteFileModal.classList.add('hidden'); });
+      document.addEventListener('keydown', e => { if (e.key === 'Escape') deleteFileModal.classList.add('hidden'); });
+    }
+
+    // ── Folder-picker modal + Move button ─────────────────────────────────────
+    const folderPickerModal = document.getElementById('folderPickerModal');
+    let pickerSelectedPath = '';
+
+    function renderTree(nodes, container) {
+      const ul = document.createElement('ul');
+      ul.className = 'folder-tree-list';
+      if (container.id === 'folderTreeRoot') ul.setAttribute('role', 'group');
+      for (const n of nodes) {
+        const li = document.createElement('li');
+        li.className = 'folder-tree-node';
+        li.setAttribute('role', 'treeitem');
+        li.dataset.path = n.path || '';
+        const row = document.createElement('div');
+        row.className = 'folder-tree-row';
+        const chevron = document.createElement('span');
+        chevron.className = 'folder-tree-chevron' + (n.children && n.children.length ? '' : ' folder-tree-chevron-empty');
+        chevron.setAttribute('aria-hidden', 'true');
+        chevron.textContent = n.children && n.children.length ? '▸' : '·';
+        const label = document.createElement('span');
+        label.className = 'folder-tree-label';
+        label.textContent = n.path ? n.name : '(root)';
+        const icon = document.createElement('span');
+        icon.className = 'folder-tree-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.textContent = '📁';
+        row.appendChild(chevron);
+        row.appendChild(icon);
+        row.appendChild(label);
+        li.appendChild(row);
+        if (n.children && n.children.length) {
+          li.setAttribute('aria-expanded', 'false');
+          const childWrap = document.createElement('div');
+          childWrap.className = 'folder-tree-children hidden';
+          renderTree(n.children, childWrap);
+          li.appendChild(childWrap);
+          chevron.style.cursor = 'pointer';
+          chevron.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            const expanded = li.getAttribute('aria-expanded') === 'true';
+            li.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+            childWrap.classList.toggle('hidden', expanded);
+            chevron.textContent = expanded ? '▸' : '▾';
+          });
+        }
+        row.addEventListener('click', () => {
+          document.querySelectorAll('.folder-tree-row.selected').forEach(r => r.classList.remove('selected'));
+          row.classList.add('selected');
+          pickerSelectedPath = n.path || '';
+          const disp = document.getElementById('selectedFolderDisplay');
+          if (disp) disp.textContent = pickerSelectedPath ? pickerSelectedPath : '(root)';
+          const confirmBtn = document.getElementById('confirmFolderPickerBtn');
+          if (confirmBtn) confirmBtn.disabled = false;
+        });
+        ul.appendChild(li);
+      }
+      container.appendChild(ul);
+    }
+
+    function openFolderPicker() {
+      const checkedBoxes = Array.from(document.querySelectorAll('input.file-row-checkbox:checked'));
+      if (checkedBoxes.length === 0) return;
+      pickerSelectedPath = '';
+      const disp = document.getElementById('selectedFolderDisplay');
+      if (disp) disp.textContent = '(root)';
+      const confirmBtn = document.getElementById('confirmFolderPickerBtn');
+      if (confirmBtn) confirmBtn.disabled = true;
+      const root = document.getElementById('folderTreeRoot');
+      root.innerHTML = '';
+      folderPickerModal.classList.remove('hidden');
+      fetch('/uploads/folders/tree', { credentials: 'same-origin', cache: 'no-cache' })
+        .then(r => r.ok ? r.json() : Promise.reject(new Error('Failed to load folder tree')))
+        .then(tree => {
+          const rootNodes = [{ name: '(root)', path: '', children: tree || [] }];
+          renderTree(rootNodes, root);
+          setTimeout(() => {
+            const firstRow = root.querySelector('.folder-tree-row');
+            if (firstRow) {
+              firstRow.classList.add('selected');
+              pickerSelectedPath = '';
+              const confirmBtn2 = document.getElementById('confirmFolderPickerBtn');
+              if (confirmBtn2) confirmBtn2.disabled = false;
+            }
+          }, 30);
+        })
+        .catch(err => {
+          root.innerHTML = '<p class="error-inline">Could not load folder tree. Please refresh and try again.</p>';
+        });
+    }
+
+    if (moveBtn) moveBtn.addEventListener('click', openFolderPicker);
+    document.getElementById('closeFolderPickerBtn') && document.getElementById('closeFolderPickerBtn').addEventListener('click', () => folderPickerModal.classList.add('hidden'));
+    document.getElementById('cancelFolderPickerBtn') && document.getElementById('cancelFolderPickerBtn').addEventListener('click', () => folderPickerModal.classList.add('hidden'));
+    folderPickerModal && folderPickerModal.addEventListener('click', e => { if (e.target === folderPickerModal) folderPickerModal.classList.add('hidden'); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (folderPickerModal) folderPickerModal.classList.add('hidden'); } });
+    const confirmPickBtn = document.getElementById('confirmFolderPickerBtn');
+    if (confirmPickBtn) {
+      confirmPickBtn.addEventListener('click', () => {
+        const checkedBoxes = Array.from(document.querySelectorAll('input.file-row-checkbox:checked'));
+        if (checkedBoxes.length === 0) { folderPickerModal.classList.add('hidden'); return; }
+        const dest = pickerSelectedPath;
+        const promptLine = `Move ${checkedBoxes.length} file${checkedBoxes.length !== 1 ? 's' : ''} to ${dest ? ('"' + dest + '"') : 'the root folder'}?`;
+        const ok = window.confirm(promptLine);
+        if (!ok) return;
+        const form = document.getElementById('moveFilesForm');
+        document.getElementById('moveDestinationPath').value = dest;
+        const prev = form.querySelectorAll('input[name="files"]');
+        prev.forEach(p => p.remove());
+        for (const cb of checkedBoxes) {
+          const inp = document.createElement('input');
+          inp.type = 'hidden';
+          inp.name = 'files';
+          inp.value = cb.value;
+          form.appendChild(inp);
+        }
+        folderPickerModal.classList.add('hidden');
+        form.submit();
+      });
+    }
+
+    // ── Adopt single orphan file ──────────────────────────────────────────────
+    document.addEventListener('click', e => {
+      const adoptBtn = e.target.closest('.adopt-file-btn');
+      if (!adoptBtn) return;
+      e.preventDefault();
+      const relPath = adoptBtn.dataset.relPath || '';
+      const display = adoptBtn.dataset.displayname || relPath;
+      const parts = relPath.split('/');
+      const safe = parts.map(encodeURIComponent).join('/');
+      const form = document.getElementById('adoptFileForm');
+      if (!form) return;
+      form.action = '/uploads/adopt/' + safe;
+      if (!window.confirm(`Adopt untracked file "${display}"?\n\nThis will create an uploads.json record for it using its disk metadata.`)) return;
+      form.submit();
     });
-    document.addEventListener('keydown', e => {
-      if (e.key === 'Escape') deleteFileModal.classList.add('hidden');
+
+    // ── Remove single dangling record ─────────────────────────────────────────
+    document.addEventListener('click', e => {
+      const rmBtn = e.target.closest('.remove-dangling-btn');
+      if (!rmBtn) return;
+      e.preventDefault();
+      const relPath = rmBtn.dataset.relPath || '';
+      const display = rmBtn.dataset.displayname || relPath;
+      const form = document.getElementById('removeDanglingForm');
+      if (!form) return;
+      document.getElementById('removeDanglingRelPath').value = relPath;
+      if (!window.confirm(`Remove dangling record "${display}"?\n\nThis deletes the uploads.json entry (no file exists on disk to delete).`)) return;
+      form.submit();
     });
-  }
+
+    // ── Toolbar: Adopt All Orphans Here ───────────────────────────────────────
+    const adoptAllBtn = document.getElementById('adoptAllBtn');
+    if (adoptAllBtn) {
+      adoptAllBtn.addEventListener('click', () => {
+        if (adoptAllBtn.disabled) return;
+        const form = document.getElementById('adoptAllForm');
+        if (!form) return;
+        if (!window.confirm('Adopt ALL untracked files in this folder?\n\nThis will create uploads.json records for every orphan file currently in this folder.')) return;
+        form.submit();
+      });
+    }
+
+    // ── Toolbar: Prune Dangling Here ──────────────────────────────────────────
+    const pruneDanglingBtn = document.getElementById('pruneDanglingBtn');
+    if (pruneDanglingBtn) {
+      pruneDanglingBtn.addEventListener('click', () => {
+        if (pruneDanglingBtn.disabled) return;
+        const form = document.getElementById('pruneDanglingForm');
+        if (!form) return;
+        document.getElementById('pruneDanglingPath').value = CURRENT_FOLDER_PATH || '';
+        if (!window.confirm('Remove ALL dangling records in this folder?\n\nThis deletes uploads.json entries for which no file exists on disk.')) return;
+        form.submit();
+      });
+    }
+
+    // ── Toolbar: Global Prune Dangling ────────────────────────────────────────
+    const pruneGlobalBtn = document.getElementById('pruneDanglingGlobalBtn');
+    if (pruneGlobalBtn) {
+      pruneGlobalBtn.addEventListener('click', () => {
+        const form = document.getElementById('pruneDanglingForm');
+        if (!form) return;
+        document.getElementById('pruneDanglingPath').value = '__global__';
+        if (!window.confirm('⚠ Global Dangling Record Prune\n\nThis will scan the ENTIRE uploads index and remove ALL upload records for which no file exists on disk, across every folder.\n\nPage attachments pointing to these records will also be cleaned up.\n\nThis cannot be undone. Continue?')) return;
+        form.submit();
+      });
+    }
+
+  })();
 </script>

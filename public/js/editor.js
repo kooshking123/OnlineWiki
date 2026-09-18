@@ -369,9 +369,17 @@
   const attachPickerSearch  = document.getElementById('attachPickerSearch');
   const attachPickerList    = document.getElementById('attachPickerList');
   const attachPickerTitle   = document.getElementById('attachPickerTitle');
+  const attachPickerSidebar = document.getElementById('attachPickerSidebar');
+  const attachPickerBreadcrumb = document.getElementById('attachPickerBreadcrumb');
 
   // Picker mode: 'attach' (default, for sidebar chips), 'image' (embed img tag), 'file' (insert anchor link to doc)
   let pickerMode = 'attach';
+
+  // Current folder path being shown (folder-aware picker) — empty string = root.
+  let pickerCurrentFolder = '';
+
+  // For sidebar attach chip flow — keep legacy flat recursive list cached.
+  let cachedAllFlatFiles = null;
 
   // Collect slugs of already-attached files (initially from server-rendered chips)
   let currentAttachments = Array.from(
@@ -393,7 +401,10 @@
     if (fromTinyMCE) attachPickerModal.classList.add('modal-overlay--above-tinymce');
     else attachPickerModal.classList.remove('modal-overlay--above-tinymce');
     attachPickerModal.classList.remove('hidden');
+    pickerCurrentFolder = '';
+    cachedAllFlatFiles = null;
     loadAttachPickerFiles();
+    loadAttachPickerTree();
     if (attachPickerSearch) {
       attachPickerSearch.value = '';
       setTimeout(() => attachPickerSearch.focus(), 80);
@@ -405,6 +416,8 @@
     // If we close while a TinyMCE picker was pending, notify TinyMCE by clearing
     if (pendingPicker) pendingPicker = null;
     pickerMode = 'attach';
+    pickerCurrentFolder = '';
+    cachedAllFlatFiles = null;
     attachPickerModal.classList.add('hidden');
     attachPickerModal.classList.remove('modal-overlay--above-tinymce');
     if (attachPickerTitle) attachPickerTitle.textContent = 'Attach File to Page';
@@ -426,29 +439,139 @@
     }
   });
 
-  async function loadAttachPickerFiles() {
-    if (!attachPickerList) return;
-    attachPickerList.innerHTML = '<p class="editor-hint">Loading…</p>';
+  async function loadAttachPickerTree() {
+    if (!attachPickerSidebar) return;
     try {
-      const res   = await fetch('/api/uploads');
-      const files = await res.json();
-      renderPickerFiles(files);
+      const res  = await fetch('/uploads/folders/tree', { headers: { 'Cache-Control': 'no-cache' } });
+      const tree = await res.json();
+      renderSidebarTree(tree);
     } catch {
-      attachPickerList.innerHTML = '<p class="editor-hint" style="color:var(--c-danger)">Failed to load files.</p>';
+      attachPickerSidebar.innerHTML = '<p class="editor-hint" style="padding:0.5rem 0.75rem;color:var(--c-danger)">Failed to load folder tree.</p>';
     }
   }
 
-  function renderPickerFiles(files) {
+  function renderSidebarTree(tree) {
+    if (!attachPickerSidebar) return;
+    if (!Array.isArray(tree)) tree = [];
+    const rootHtml = `<div class="fp-tree-row fp-tree-row--root${pickerCurrentFolder === '' ? ' is-selected' : ''}" data-path="" role="button" tabindex="0">
+        <span class="fp-tree-icon">▾</span>
+        <span class="fp-folder-icon">📁</span>
+        <span class="fp-tree-name">Documents</span>
+      </div>`;
+    const html = rootHtml + renderTreeLevel(tree, 1);
+    attachPickerSidebar.innerHTML = html;
+    attachPickerSidebar.querySelectorAll('.fp-tree-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const p = row.dataset.path || '';
+        if (p === pickerCurrentFolder) return;
+        pickerCurrentFolder = p;
+        loadAttachPickerFiles();
+        renderSidebarTree(tree);
+      });
+      row.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault(); row.click();
+        }
+      });
+    });
+  }
+
+  function renderTreeLevel(nodes, depth) {
+    if (!Array.isArray(nodes) || nodes.length === 0) return '';
+    const indent = Math.max(0, depth) * 16;
+    return nodes.map(n => {
+      const selected = (n.path || '') === pickerCurrentFolder;
+      const childrenHtml = Array.isArray(n.children) && n.children.length > 0
+        ? renderTreeLevel(n.children, depth + 1)
+        : '';
+      const hasChildren = childrenHtml.length > 0;
+      return `<div class="fp-tree-row${selected ? ' is-selected' : ''}" data-path="${escHtml(n.path || '')}" role="button" tabindex="0" style="padding-left:${indent}px">
+        <span class="fp-tree-icon">${hasChildren ? '▾' : ' '}</span>
+        <span class="fp-folder-icon">📁</span>
+        <span class="fp-tree-name">${escHtml(n.name || '')}</span>
+      </div>` + childrenHtml;
+    }).join('');
+  }
+
+  async function loadAttachPickerFiles() {
     if (!attachPickerList) return;
-    if (!files || files.length === 0) {
+    // Breadcrumb render first (sync optimistic from current path).
+    renderBreadcrumb();
+    attachPickerList.innerHTML = '<p class="editor-hint">Loading…</p>';
+
+    // Mode decision:
+    // - "attach" (sidebar add chip) → keep legacy flat recursive list (search works across all folders).
+    // - "image" / "file" (TinyMCE browse or sidebar media buttons) → folder-aware listing.
+    if (pickerMode === 'attach') {
+      try {
+        let files = cachedAllFlatFiles;
+        if (!files) {
+          const res = await fetch('/api/uploads');
+          files = await res.json();
+          cachedAllFlatFiles = files;
+        }
+        renderPickerFilesFlat(files);
+      } catch {
+        attachPickerList.innerHTML = '<p class="editor-hint" style="color:var(--c-danger)">Failed to load files.</p>';
+      }
+      return;
+    }
+
+    try {
+      const url = '/api/uploads?path=' + encodeURIComponent(pickerCurrentFolder || '');
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('bad status ' + res.status);
+      const data = await res.json();
+      renderPickerFolder(data);
+    } catch {
+      attachPickerList.innerHTML = '<p class="editor-hint" style="color:var(--c-danger)">Failed to load folder.</p>';
+    }
+  }
+
+  function renderBreadcrumb() {
+    if (!attachPickerBreadcrumb) return;
+    const segs = (pickerCurrentFolder || '').split('/').filter(Boolean);
+    const crumbs = [{ name: 'Documents', path: '' }];
+    let acc = '';
+    for (const s of segs) {
+      acc = acc ? acc + '/' + s : s;
+      crumbs.push({ name: s, path: acc });
+    }
+    attachPickerBreadcrumb.innerHTML = crumbs.map((c, i) => {
+      const last = i === crumbs.length - 1;
+      return `<a class="attach-bc-crumb${last ? ' is-current' : ''}" data-path="${escHtml(c.path || '')}" role="button" tabindex="0" aria-current="${last ? 'page' : 'false'}">${escHtml(c.name)}</a>` +
+        (last ? '' : '<span class="attach-bc-sep" aria-hidden="true">›</span>');
+    }).join('');
+    attachPickerBreadcrumb.querySelectorAll('.attach-bc-crumb').forEach(a => {
+      a.addEventListener('click', () => {
+        const p = a.dataset.path || '';
+        if (p === pickerCurrentFolder) return;
+        pickerCurrentFolder = p;
+        loadAttachPickerFiles();
+        loadAttachPickerTree();
+      });
+      a.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); a.click(); }
+      });
+    });
+  }
+
+  function renderPickerFilesFlat(files) {
+    if (!attachPickerList) return;
+    let safe = Array.isArray(files) ? files.filter(f => f && !f.recordMissing) : [];
+    if (safe.length === 0) {
       attachPickerList.innerHTML =
         '<p class="editor-hint">No uploaded files found. <a href="/uploads" target="_blank" rel="noopener">Go to Uploads</a></p>';
       return;
     }
 
     const q = attachPickerSearch ? attachPickerSearch.value.toLowerCase() : '';
-    let filtered = q ? files.filter(f => f.originalName.toLowerCase().includes(q)) : files;
-    if (pickerMode === 'image') filtered = filtered.filter(f => IMAGE_EXT_RE.test(f.originalName) || IMAGE_EXT_RE.test(f.name));
+    let filtered = q ? safe.filter(f =>
+      (f.originalName || '').toLowerCase().includes(q) ||
+      (f.name || '').toLowerCase().includes(q) ||
+      (f.folderPath || '').toLowerCase().includes(q)
+    ) : safe.slice();
+    if (pickerMode === 'image') filtered = filtered.filter(f => IMAGE_EXT_RE.test(f.originalName || f.name || ''));
 
     if (filtered.length === 0) {
       attachPickerList.innerHTML = pickerMode === 'image'
@@ -458,31 +581,131 @@
     }
 
     attachPickerList.innerHTML = filtered.map(f => {
+      const rel = f.relPath || f.name || '';
       const already = pickerMode === 'attach' && currentAttachments.includes(f.name);
-      const isImage = IMAGE_EXT_RE.test(f.name) || IMAGE_EXT_RE.test(f.originalName);
+      const isImage = IMAGE_EXT_RE.test(f.name || '') || IMAGE_EXT_RE.test(f.originalName || '');
       const actionLabel =
         pickerMode === 'image' ? 'Embed Image' :
         pickerMode === 'file'  ? 'Insert Link' :
         already                ? '✓ Added'    : '+ Attach';
+      const folderHint = f.folderPath ? `<span class="attach-picker-folder">in ${escHtml(f.folderPath)}</span>` : '';
       return `
         <div class="attach-picker-item ${already ? 'already-attached' : ''} ${isImage ? 'is-image' : ''}"
              data-filename="${escHtml(f.name)}"
+             data-relpath="${escHtml(rel)}"
              data-originalname="${escHtml(f.originalName)}"
              role="button"
              tabindex="${already ? '-1' : '0'}"
              aria-disabled="${already}"
              aria-label="${escHtml(f.originalName)}${already ? ' (already attached)' : ''}">
-          <span class="attach-picker-icon">${escHtml(f.icon)}</span>
+          <span class="attach-picker-icon">${escHtml(f.icon || '📄')}</span>
           <div class="attach-picker-info">
             <span class="attach-picker-name">${escHtml(f.originalName)}</span>
-            <span class="attach-picker-size">${escHtml(f.size)}</span>
+            <span class="attach-picker-size">${escHtml(f.size || '')}${folderHint ? ' · ' + folderHint : ''}</span>
           </div>
           <span class="attach-picker-add">${actionLabel}</span>
         </div>`;
     }).join('');
 
-    // Bind click handlers
     attachPickerList.querySelectorAll('.attach-picker-item').forEach(item => {
+      const disabled = item.classList.contains('already-attached');
+      if (disabled) return;
+      item.addEventListener('click', () => pickerItemChosen(item));
+      item.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickerItemChosen(item); }
+      });
+    });
+  }
+
+  function renderPickerFolder(data) {
+    if (!attachPickerList) return;
+    if (!data || typeof data !== 'object') {
+      attachPickerList.innerHTML = '<p class="editor-hint" style="color:var(--c-danger)">Invalid server response.</p>';
+      return;
+    }
+    const subfolders = Array.isArray(data.subfolders) ? data.subfolders : [];
+    const filesRaw   = Array.isArray(data.files)      ? data.files      : [];
+    const files      = filesRaw.filter(f => f && !f.recordMissing);
+    const q          = attachPickerSearch ? attachPickerSearch.value.toLowerCase() : '';
+
+    const filteredFolders = q ? subfolders.filter(sf => sf.name.toLowerCase().includes(q)) : subfolders;
+    let filteredFiles = q ? files.filter(f =>
+      (f.originalName || '').toLowerCase().includes(q) ||
+      (f.storedName || '').toLowerCase().includes(q) ||
+      (f.name || '').toLowerCase().includes(q)
+    ) : files.slice();
+    if (pickerMode === 'image') {
+      filteredFiles = filteredFiles.filter(f => IMAGE_EXT_RE.test(f.originalName || f.storedName || f.name || ''));
+    }
+
+    const emptyFolder = filteredFolders.length === 0 && filteredFiles.length === 0;
+    if (emptyFolder) {
+      const tip = pickerMode === 'image'
+        ? 'No files or subfolders here. <a href="/uploads" target="_blank" rel="noopener">Go to Uploads</a> to add PNG/JPG/GIF/SVG.'
+        : 'No files or subfolders match your search.';
+      attachPickerList.innerHTML = `<p class="editor-hint">${tip}</p>`;
+      return;
+    }
+
+    let html = '';
+    if (filteredFolders.length > 0) {
+      html += '<div class="attach-picker-section attach-picker-section--folders">' +
+        filteredFolders.map(sf => {
+          return `<div class="attach-picker-item attach-picker-item--folder"
+                       data-folderpath="${escHtml(sf.rel)}" role="button" tabindex="0"
+                       aria-label="Open folder ${escHtml(sf.name)}">
+            <span class="attach-picker-icon">📁</span>
+            <div class="attach-picker-info">
+              <span class="attach-picker-name">${escHtml(sf.name)}</span>
+              <span class="attach-picker-size">Folder</span>
+            </div>
+            <span class="attach-picker-add">Open ›</span>
+          </div>`;
+        }).join('') + '</div>';
+    }
+    if (filteredFiles.length > 0) {
+      html += '<div class="attach-picker-section attach-picker-section--files">' +
+        filteredFiles.map(f => {
+          const rel = f.relPath || f.name || f.storedName || '';
+          const storedName = f.storedName || f.name || '';
+          const already = pickerMode === 'attach' && currentAttachments.includes(storedName);
+          const isImage = IMAGE_EXT_RE.test(storedName || '') || IMAGE_EXT_RE.test(f.originalName || '');
+          const orphan  = !!f.orphan;
+          const actionLabel =
+            pickerMode === 'image' ? 'Embed Image' :
+            pickerMode === 'file'  ? 'Insert Link' :
+            already                ? '✓ Added'    : '+ Attach';
+          return `<div class="attach-picker-item ${already ? 'already-attached' : ''} ${isImage ? 'is-image' : ''} ${orphan ? 'is-orphan' : ''}"
+                       data-filename="${escHtml(storedName)}"
+                       data-relpath="${escHtml(rel)}"
+                       data-originalname="${escHtml(f.originalName || storedName)}"
+                       role="button"
+                       tabindex="${already ? '-1' : '0'}"
+                       aria-disabled="${already}"
+                       aria-label="${escHtml(f.originalName || storedName)}${orphan ? ' (orphan file)' : ''}${already ? ' (already attached)' : ''}">
+            <span class="attach-picker-icon">${orphan ? '⚠️' : (f.icon || (isImage ? '🖼️' : '📄'))}</span>
+            <div class="attach-picker-info">
+              <span class="attach-picker-name">${escHtml(f.originalName || storedName)}</span>
+              <span class="attach-picker-size">${escHtml(f.size || '')}</span>
+            </div>
+            <span class="attach-picker-add">${actionLabel}</span>
+          </div>`;
+        }).join('') + '</div>';
+    }
+    attachPickerList.innerHTML = html;
+
+    attachPickerList.querySelectorAll('.attach-picker-item--folder').forEach(row => {
+      row.addEventListener('click', () => {
+        const next = row.dataset.folderpath || '';
+        pickerCurrentFolder = next;
+        loadAttachPickerFiles();
+        loadAttachPickerTree();
+      });
+      row.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); row.click(); }
+      });
+    });
+    attachPickerList.querySelectorAll('.attach-picker-item:not(.attach-picker-item--folder)').forEach(item => {
       const disabled = item.classList.contains('already-attached');
       if (disabled) return;
       item.addEventListener('click', () => pickerItemChosen(item));
@@ -494,19 +717,20 @@
 
   function pickerItemChosen(item) {
     const filename     = item.dataset.filename;
+    const relPath      = item.dataset.relpath || filename;
     const originalName = item.dataset.originalname || filename.replace(/^\d+_/, '');
+
+    // File URL — build full relPath so nested files correctly GET /uploads/a/b/foo.png
+    const fileUrl = '/uploads/' + String(relPath).split('/').map(encodeURIComponent).join('/');
+    const isImage = pickerMode === 'image' || IMAGE_EXT_RE.test(originalName) || IMAGE_EXT_RE.test(filename) || IMAGE_EXT_RE.test(relPath);
+
     if (pickerMode === 'attach') {
       attachFile(filename);
       return;
     }
     const ed = tinymce.activeEditor;
-    const fileUrl = '/uploads/' + encodeURIComponent(filename);
-    const isImage = pickerMode === 'image' || IMAGE_EXT_RE.test(originalName) || IMAGE_EXT_RE.test(filename);
 
     // --- Path 1: Opened via TinyMCE Browse (pendingPicker callback available) ---
-    // We call the callback so TinyMCE populates the dialog fields (URL / Alt / etc.),
-    // but many users forget to click the dialog's "Save" afterwards, so also insert
-    // immediately below as a belt+braces fallback when dialog is about-to-close.
     if (pendingPicker && typeof pendingPicker.cb === 'function') {
       const cb   = pendingPicker.cb;
       const meta = pendingPicker.meta;
@@ -516,13 +740,8 @@
       } else {
         try { cb(fileUrl, { text: originalName, title: originalName }); } catch (_) { /* ignore */ }
       }
-      // Belt+braces: if after TinyMCE cb() nothing changed, force-insert now.
-      // (Handles "I clicked Insert Link in picker, expected immediate insert" UX.)
-      // Delay slightly so TinyMCE dialog DOM updates first, then close dialog + insert.
       setTimeout(function () {
         try {
-          // Close TinyMCE's dialog so picker choice is the final action, not "still pending in dialog".
-          // TinyMCE 7 does not expose windowManager.getWindows(); close via DOM Cancel / X buttons.
           const wraps = document.querySelectorAll('.tox-dialog-wrap');
           for (let i = 0; i < wraps.length; i++) {
             const w = wraps[i];
@@ -537,8 +756,6 @@
             }
           }
         } catch (_) { /* ignore */ }
-        // Force insert into editor if not yet present.
-        // (Handles "I clicked Insert Link in picker, expected immediate insert" UX.)
         if (ed && !isInContentAlready(ed, fileUrl)) {
           if (isImage) insertImageDirect(ed, fileUrl, originalName);
           else         insertLinkDirect(ed, fileUrl, originalName);
@@ -549,7 +766,6 @@
     }
 
     // --- Path 2: Opened via sidebar "Media" widget (no pendingPicker) ---
-    // Insert directly into TinyMCE content without any extra dialog step.
     if (!ed) return;
     if (isImage) insertImageDirect(ed, fileUrl, originalName);
     else         insertLinkDirect(ed, fileUrl, originalName);
@@ -585,10 +801,8 @@
   }
 
   if (attachPickerSearch) {
-    attachPickerSearch.addEventListener('input', async function () {
-      const res   = await fetch('/api/uploads');
-      const files = await res.json();
-      renderPickerFiles(files);
+    attachPickerSearch.addEventListener('input', function () {
+      loadAttachPickerFiles();
     });
   }
 

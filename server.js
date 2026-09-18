@@ -286,12 +286,11 @@ if (SSL_CERT_ABS || SSL_KEY_ABS) {
 //   • relative (to process.cwd()) — e.g. 'data'  (default, backward compatible)
 //   • absolute on a mapped drive  — e.g. 'X:\\OnlineWiki-Data'
 //   • absolute UNC                — e.g. \\\\filer.corp\\wiki$  (if Windows runs as an account with share access)
-const DATA_DIR = (process.env.DATA_DIR || 'data').trim() || 'data';
-const LOGS_DIR = (process.env.LOG_DIR  || 'logs').trim() || 'logs';
-// Absolute-resolve for logs: sessions store / assertWithinBaseDir / multer do their
-// own resolve, but consistency is easier to debug when we print a canonical path.
-const DATA_DIR_ABS = path.resolve(DATA_DIR);
-const LOGS_DIR_ABS = path.resolve(LOGS_DIR);
+const DATA_DIR = path.resolve(((process.env.DATA_DIR || 'data').trim() || 'data'));
+const LOGS_DIR = path.resolve(((process.env.LOG_DIR  || 'logs').trim() || 'logs'));
+// For legacy use sites that test against DATA_DIR_ABS: keep aliases (same resolved value).
+const DATA_DIR_ABS = DATA_DIR;
+const LOGS_DIR_ABS = LOGS_DIR;
 
 // ─── Data subdirs + files (all under the single shared DATA_DIR) ──────────────
 const PAGES_DIR     = path.join(DATA_DIR, 'pages');
@@ -932,10 +931,13 @@ app.use((req, res, next) => {
   //   succeeds and session.regenerate() runs.  Always allow.
   if (req.method === 'POST' && req.path === '/login') return next();
 
-  // • POST /uploads (multipart/form-data): the hidden _csrf field cannot be
-  //   parsed by express.urlencoded so route-local check runs after multer.
+  // • POST /uploads or /uploads/upload (multipart/form-data): the hidden _csrf
+  //   field cannot be parsed by express.urlencoded so route-local check runs
+  //   after multer processes the body.
   const ct = req.headers['content-type'] || '';
-  if (req.method === 'POST' && req.path === '/uploads' && /^multipart\/form-data/i.test(ct)) return next();
+  if (req.method === 'POST' &&
+      (req.path === '/uploads' || req.path === '/uploads/upload') &&
+      /^multipart\/form-data/i.test(ct)) return next();
 
   // Diagnostic: capture submitted/expected hashes BEFORE csrf-sync runs.
   let submitted, submittedRaw, submittedSrc, expected;
@@ -1334,6 +1336,138 @@ function formatBytes(bytes) {
   if (bytes < 1024)              return `${bytes} B`;
   if (bytes < 1024 * 1024)      return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+const UPLOADS_INDEX_FILE = path.join(DATA_DIR, 'uploads.json');
+const SAFE_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._ -]{0,99}$/;
+const MAX_FOLDER_DEPTH = 8;
+const UPLOADS_BASE_DIR = UPLOADS_DIR;
+
+function mkdirpIfMissing(dir) {
+  fs.ensureDirSync(dir);
+}
+
+class ValidationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ValidationError';
+    this.statusCode = 400;
+  }
+}
+
+function normalizeAndValidateFolderPath(userInput) {
+  const raw = typeof userInput === 'string' ? userInput.trim() : '';
+  if (!raw) return '';
+  let normalized = raw.replace(/\\/g, '/');
+  normalized = normalized.replace(/\/+/g, '/');
+  if (normalized.startsWith('/')) normalized = normalized.slice(1);
+  if (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
+  if (!normalized) return '';
+  const segments = normalized.split('/');
+  if (segments.length > MAX_FOLDER_DEPTH) {
+    throw new ValidationError(`Max folder depth ${MAX_FOLDER_DEPTH} exceeded.`);
+  }
+  for (const seg of segments) {
+    if (!seg || seg === '.' || seg === '..') {
+      throw new ValidationError('Invalid folder path: contains . or ..');
+    }
+    if (!SAFE_NAME_RE.test(seg)) {
+      throw new ValidationError(`Invalid folder name segment: "${seg}". Use letters, numbers, spaces, dots, underscores, hyphens only (1-100 chars).`);
+    }
+  }
+  return segments.join('/');
+}
+
+async function uniqueNameWithinParent(parentPath, newName, type) {
+  const normalizedParent = normalizeAndValidateFolderPath(parentPath);
+  const resolvedParent = normalizedParent
+    ? path.join(UPLOADS_BASE_DIR, normalizedParent)
+    : UPLOADS_BASE_DIR;
+  const checked = assertWithinBaseDir(resolvedParent, UPLOADS_BASE_DIR);
+  if (!checked) throw new ValidationError('Invalid parent path.');
+  if (!fs.existsSync(checked)) {
+    return true;
+  }
+  const entries = await fs.promises.readdir(checked, { withFileTypes: true });
+  const targetNameLow = String(newName).toLowerCase();
+  for (const ent of entries) {
+    const isMatchType = type === 'folder' ? ent.isDirectory() : ent.isFile();
+    if (isMatchType && ent.name.toLowerCase() === targetNameLow) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function coerceUploadRecord(record) {
+  if (!record || typeof record !== 'object') return null;
+  if (typeof record.folderPath !== 'string') record.folderPath = '';
+  if (record.folderPath) {
+    try {
+      record.folderPath = normalizeAndValidateFolderPath(record.folderPath);
+    } catch {
+      record.folderPath = '';
+    }
+  }
+  if (typeof record.updatedAt !== 'string') {
+    record.updatedAt = record.uploadedAt || new Date().toISOString();
+  }
+  return record;
+}
+
+function readUploadsIndex() {
+  let data;
+  try {
+    if (fs.existsSync(UPLOADS_INDEX_FILE)) {
+      data = fs.readJsonSync(UPLOADS_INDEX_FILE);
+    }
+  } catch (e) {
+    systemLogger.warn('uploads.json corrupt or unreadable — starting empty', { error: e.message });
+    data = null;
+  }
+  if (!data || typeof data !== 'object') data = { uploads: [], updatedAt: null };
+  if (!Array.isArray(data.uploads)) data.uploads = [];
+  data.uploads = data.uploads.map(coerceUploadRecord).filter(Boolean);
+  if (typeof data.updatedAt !== 'string') data.updatedAt = new Date().toISOString();
+  return data;
+}
+
+function writeUploadsIndex(data) {
+  if (!data || typeof data !== 'object' || !Array.isArray(data.uploads)) {
+    throw new Error('Invalid uploads index structure.');
+  }
+  const now = new Date().toISOString();
+  data.updatedAt = now;
+  writeJsonAtomic(UPLOADS_INDEX_FILE, data);
+  return data;
+}
+
+const folderTreeCache = { data: null, ts: 0, ttlMs: 30 * 1000 };
+
+async function buildFolderTree(rootDir) {
+  const nowTs = Date.now();
+  if (folderTreeCache.data && (nowTs - folderTreeCache.ts) < folderTreeCache.ttlMs) {
+    return folderTreeCache.data;
+  }
+  async function walk(dir) {
+    const checked = assertWithinBaseDir(dir, UPLOADS_BASE_DIR);
+    if (!checked || !fs.existsSync(checked)) return [];
+    const entries = await fs.promises.readdir(checked, { withFileTypes: true });
+    const folders = [];
+    for (const ent of entries) {
+      if (ent.isDirectory() && !ent.name.startsWith('.')) {
+        const rel = path.relative(UPLOADS_BASE_DIR, path.join(dir, ent.name)).replace(/\\/g, '/');
+        const children = await walk(path.join(dir, ent.name));
+        folders.push({ name: ent.name, path: rel, children });
+      }
+    }
+    folders.sort((a, b) => a.name.localeCompare(b.name));
+    return folders;
+  }
+  const tree = await walk(UPLOADS_BASE_DIR);
+  folderTreeCache.data = tree;
+  folderTreeCache.ts = nowTs;
+  return tree;
 }
 
 function listUploads() {
@@ -1767,11 +1901,23 @@ app.post('/pages/:slug/edit', ensureRole('editor'), (req, res) => {
 
   // Title-duplicate guard — case-insensitive match against OTHER pages only
   // (the current page itself is allowed to keep its own title unchanged).
-  if (newTitle) {
+  // ── Critical: skip guard entirely if the submitted title has NOT changed
+  //    from the on-disk title.  Otherwise any content-only edit to a page
+  //    whose title already exists elsewhere (duplicate titles are *allowed*)
+  //    re-renders the edit screen with confirmDuplicate=true, forcing the
+  //    user to click "Save Page" a second time (it then bypasses because
+  //    confirmDuplicate is true on the second submission).  This matches
+  //    client runDuplicateGuardAndMaybeConfirm() which already does:
+  //      var titleChanged = isNewPage || (newTitleLower !== originalTitle);
+  //      if (!newTitle || !titleChanged) return true;
+  const existingTitleLower = (existingPage.title || '').trim().toLowerCase();
+  const newTitleLower      = newTitle.toLowerCase();
+  const titleActuallyChanged = (newTitleLower !== existingTitleLower);
+  if (newTitle && titleActuallyChanged) {
     const dupTitleMatch = listPages().find(p =>
       p.slug !== slug &&
       p.title &&
-      p.title.toLowerCase() === newTitle.toLowerCase());
+      p.title.toLowerCase() === newTitleLower);
     if (dupTitleMatch && !confirmDuplicate) {
       req.flash('error',
         `Another page titled "${dupTitleMatch.title}" already exists (slug: ${dupTitleMatch.slug}). ` +
@@ -2069,42 +2215,220 @@ app.post('/pages/:slug/image-upload', ensureRole('editor'), express.json({ limit
   }
 });
 
-// ─── Uploads ───────────────────────────────────────────────────────────────────
-app.get('/uploads', ensureAuth, (req, res) => {
-  // Never allow the browser or any proxy to cache this page.  Each render
-  // embeds a fresh session-bound CSRF token into the upload/delete forms;
-  // stale cached pages lead to "invalid csrf token" rejections on submit.
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
-  res.setHeader('Surrogate-Control', 'no-store');
-  res.render('uploads', { title: 'Documents — OnlineWiki', files: listUploads(), csrfToken: res.locals.csrfToken });
+// ─── Uploads folder helpers (T3–T7 routing) ──────────────────────────────────
+function _uploadsRedirectBack(req) {
+  const p = typeof req.body.redirect === 'string' && req.body.redirect.startsWith('/') && !req.body.redirect.startsWith('//')
+    ? req.body.redirect
+    : null;
+  const from = typeof req.query.from === 'string' && req.query.from.startsWith('/') && !req.query.from.startsWith('//')
+    ? req.query.from
+    : null;
+  const target = p || from || '/uploads';
+  const sep = target.includes('?') ? '&' : '?';
+  const fp = typeof req.body.folderPath === 'string' ? req.body.folderPath :
+             (typeof req.query.path === 'string' ? req.query.path : '');
+  if (fp && !target.includes('path=')) {
+    return target + sep + 'path=' + encodeURIComponent(fp);
+  }
+  return target;
+}
+
+function _uploadsBreadcrumb(folderPath) {
+  const crumbs = [{ name: 'Documents', path: '' }];
+  if (!folderPath) return crumbs;
+  const segs = folderPath.split('/');
+  let acc = '';
+  for (const s of segs) {
+    acc = acc ? acc + '/' + s : s;
+    crumbs.push({ name: s, path: acc });
+  }
+  return crumbs;
+}
+
+// ─── Folder Tree JSON API (T7) ───────────────────────────────────────────────
+app.get('/uploads/folders/tree', ensureAuth, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache');
+  try {
+    const tree = await buildFolderTree(UPLOADS_BASE_DIR);
+    res.json(tree);
+  } catch (err) {
+    systemLogger.error('folder tree build failed', { error: err.message, user: req.user?.username, ip: req.ip });
+    res.status(500).json({ error: 'Failed to build folder tree.' });
+  }
 });
 
-// Upload helper — wraps multer in a promise so async/await works cleanly
-function runMulterUpload(req, res) {
+// ─── T3: Folder CRUD POST routes ─────────────────────────────────────────────
+app.post('/uploads/folders/create', ensureRole('editor'), async (req, res) => {
+  try {
+    const parentPath = normalizeAndValidateFolderPath(req.body.parentPath || '');
+    const newName = String(req.body.name || '').trim();
+    if (!SAFE_NAME_RE.test(newName)) {
+      req.flash('error', 'Invalid folder name. Use letters, numbers, spaces, dots, underscores, hyphens only (1–100 chars).');
+      return req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+    }
+    const unique = await uniqueNameWithinParent(parentPath, newName, 'folder');
+    if (!unique) {
+      req.flash('error', `A folder named "${newName}" already exists here.`);
+      return req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+    }
+    const fullRel = parentPath ? parentPath + '/' + newName : newName;
+    const resolved = assertWithinBaseDir(path.join(UPLOADS_BASE_DIR, fullRel), UPLOADS_BASE_DIR);
+    if (!resolved) {
+      req.flash('error', 'Invalid folder path.');
+      return req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+    }
+    mkdirpIfMissing(resolved);
+    folderTreeCache.ts = 0;
+    auditLogger.info('FOLDER_CREATED', { folderPath: fullRel, by: req.user.username, ip: req.ip });
+    req.flash('success', `Folder "${newName}" created.`);
+    req.session.save(() => res.redirect('/uploads?path=' + encodeURIComponent(fullRel)));
+  } catch (err) {
+    systemLogger.warn('folder create failed', { error: err.message, user: req.user?.username, ip: req.ip });
+    req.flash('error', err.message || 'Failed to create folder.');
+    req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+  }
+});
+
+app.post('/uploads/folders/rename', ensureRole('editor'), async (req, res) => {
+  try {
+    const oldPath = normalizeAndValidateFolderPath(req.body.path || '');
+    if (!oldPath) {
+      req.flash('error', 'Cannot rename the root folder.');
+      return req.session.save(() => res.redirect('/uploads'));
+    }
+    const newName = String(req.body.name || '').trim();
+    if (!SAFE_NAME_RE.test(newName)) {
+      req.flash('error', 'Invalid folder name. Use letters, numbers, spaces, dots, underscores, hyphens only (1–100 chars).');
+      return req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+    }
+    const segs = oldPath.split('/');
+    const parentPath = segs.slice(0, -1).join('/');
+    const oldName = segs[segs.length - 1];
+    if (oldName.toLowerCase() === newName.toLowerCase()) {
+      req.flash('info', 'Folder name unchanged.');
+      return req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+    }
+    const unique = await uniqueNameWithinParent(parentPath, newName, 'folder');
+    if (!unique) {
+      req.flash('error', `A folder named "${newName}" already exists here.`);
+      return req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+    }
+    const oldResolved = assertWithinBaseDir(path.join(UPLOADS_BASE_DIR, oldPath), UPLOADS_BASE_DIR);
+    const newRel = parentPath ? parentPath + '/' + newName : newName;
+    const newResolved = assertWithinBaseDir(path.join(UPLOADS_BASE_DIR, newRel), UPLOADS_BASE_DIR);
+    if (!oldResolved || !newResolved) {
+      req.flash('error', 'Invalid folder path.');
+      return req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+    }
+    if (!fs.existsSync(oldResolved)) {
+      req.flash('error', 'Folder not found.');
+      return req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+    }
+    await fs.promises.rename(oldResolved, newResolved);
+    const index = readUploadsIndex();
+    const oldPrefix = oldPath + '/';
+    const newPrefix = newRel + '/';
+    for (const rec of index.uploads) {
+      if (rec.folderPath === oldPath) rec.folderPath = newRel;
+      else if (rec.folderPath.startsWith(oldPrefix)) rec.folderPath = newPrefix + rec.folderPath.slice(oldPrefix.length);
+      rec.updatedAt = new Date().toISOString();
+    }
+    writeUploadsIndex(index);
+    folderTreeCache.ts = 0;
+    auditLogger.info('FOLDER_RENAMED', { oldPath, newPath: newRel, by: req.user.username, ip: req.ip });
+    req.flash('success', `Folder renamed to "${newName}".`);
+    req.session.save(() => res.redirect('/uploads?path=' + encodeURIComponent(newRel)));
+  } catch (err) {
+    systemLogger.warn('folder rename failed', { error: err.message, user: req.user?.username, ip: req.ip });
+    req.flash('error', err.message || 'Failed to rename folder.');
+    req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+  }
+});
+
+app.post('/uploads/folders/delete', ensureRole('editor'), async (req, res) => {
+  try {
+    const targetPath = normalizeAndValidateFolderPath(req.body.path || '');
+    if (!targetPath) {
+      req.flash('error', 'Cannot delete the root folder.');
+      return req.session.save(() => res.redirect('/uploads'));
+    }
+    const resolved = assertWithinBaseDir(path.join(UPLOADS_BASE_DIR, targetPath), UPLOADS_BASE_DIR);
+    if (!resolved || !fs.existsSync(resolved)) {
+      req.flash('error', 'Folder not found.');
+      return req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+    }
+    const ents = await fs.promises.readdir(resolved);
+    if (ents.length > 0) {
+      req.flash('error', 'Folder is not empty — move or delete contents first');
+      return req.session.save(() => res.redirect('/uploads?path=' + encodeURIComponent(targetPath)));
+    }
+    await fs.promises.rmdir(resolved);
+    folderTreeCache.ts = 0;
+    const segs = targetPath.split('/');
+    const parentPath = segs.slice(0, -1).join('/');
+    auditLogger.info('FOLDER_DELETED', { folderPath: targetPath, by: req.user.username, ip: req.ip });
+    req.flash('success', 'Folder deleted.');
+    req.session.save(() => res.redirect('/uploads' + (parentPath ? '?path=' + encodeURIComponent(parentPath) : '')));
+  } catch (err) {
+    systemLogger.warn('folder delete failed', { error: err.message, user: req.user?.username, ip: req.ip });
+    req.flash('error', err.message || 'Failed to delete folder.');
+    req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+  }
+});
+
+// ─── T4: Upload handler with folderPath support ───────────────────────────────
+function _uploadsDynamicDestination(req, file, cb) {
+  try {
+    let folderPath = '';
+    const raw = req.body && req.body.folderPath;
+    if (typeof raw === 'string' && raw.trim()) {
+      folderPath = normalizeAndValidateFolderPath(raw.trim());
+    }
+    const targetDir = folderPath
+      ? assertWithinBaseDir(path.join(UPLOADS_BASE_DIR, folderPath), UPLOADS_BASE_DIR)
+      : UPLOADS_BASE_DIR;
+    if (!targetDir) return cb(new Error('Invalid folder path.'));
+    mkdirpIfMissing(targetDir);
+    cb(null, targetDir);
+  } catch (err) {
+    cb(err);
+  }
+}
+
+const storageDynamic = multer.diskStorage({
+  destination: _uploadsDynamicDestination,
+  filename: (req, file, cb) => {
+    const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, `${Date.now()}_${safe}`);
+  }
+});
+
+const uploadDynamic = multer({
+  storage: storageDynamic,
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (ALLOWED_EXTENSIONS.includes(ext)) cb(null, true);
+    else cb(new Error(`File type "${ext}" is not permitted.`));
+  }
+});
+
+function runMulterUploadDynamic(req, res) {
   return new Promise((resolve, reject) => {
-    upload.single('file')(req, res, err => {
+    uploadDynamic.single('file')(req, res, err => {
       if (err) reject(err); else resolve();
     });
   });
 }
 
-app.post('/uploads', ensureRole('editor'), async (req, res, next) => {
-  // Hard response deadline.  Multer can theoretically hang waiting for a stream
-  // event that never fires (large uploads, mid-upload client aborts, etc.).
-  // If the handler hasn't written a response within UPLOAD_TIMEOUT_MS, send a
-  // user-friendly 408/500 and END the response — this prevents the morgan
-  // "- -" dash-columns / Chrome ERR_FAILED symptom entirely.
-  const UPLOAD_TIMEOUT_MS = 45 * 1000;  // 45 seconds — enough for 50MB on slow I/O
+app.post('/uploads/upload', ensureRole('editor'), async (req, res, next) => {
+  const UPLOAD_TIMEOUT_MS = 45 * 1000;
   let responded = false;
   const safeEnd = () => { if (responded) return; responded = true; };
   const deadlineTimer = setTimeout(() => {
     if (responded) return;
     responded = true;
-    systemLogger.error('Upload handler timed out — sending deadline response', {
-      user: req.user?.username, ip: req.ip
-    });
+    systemLogger.error('Upload handler timed out', { user: req.user?.username, ip: req.ip });
     try { req.flash('error', 'Upload timed out. Please try again with a smaller file, or check your network.'); } catch {}
     try {
       req.session.save(() => {
@@ -2123,95 +2447,645 @@ app.post('/uploads', ensureRole('editor'), async (req, res, next) => {
   res.render = function patchedRender(...a) { clearTimeout(deadlineTimer); safeEnd(); return _origRender(...a); };
   const _origSendStatus = res.sendStatus.bind(res);
   res.sendStatus = function patchedSendStatus(...a) { clearTimeout(deadlineTimer); safeEnd(); return _origSendStatus(...a); };
+
   try {
-    // 1. Parse the multipart form (file + hidden fields like _csrf)
-    await runMulterUpload(req, res);
+    await runMulterUploadDynamic(req, res);
     if (responded) return;
-    // 2. Route-local CSRF check — _csrf is now in req.body because multer
-    //    extracted all form fields from the multipart stream.  We do a
-    //    constant-time manual compare instead of invoking the inner middleware
-    //    (which can hang waiting for body stream events that already fired).
     const csrfPassed = verifyCsrfConstantTime(req);
+    let folderPath = '';
+    try {
+      folderPath = normalizeAndValidateFolderPath((req.body && req.body.folderPath) || '');
+    } catch {}
+    const backUrl = '/uploads' + (folderPath ? '?path=' + encodeURIComponent(folderPath) : '');
     if (!csrfPassed) {
-      systemLogger.warn('CSRF token validation failed on upload', {
-        ip: req.ip, user: req.user?.username
-      });
+      systemLogger.warn('CSRF token validation failed on upload', { ip: req.ip, user: req.user?.username });
       req.flash('error', 'Upload rejected: invalid or missing CSRF token. Please refresh the page and try again.');
-      return req.session.save(() => { clearTimeout(deadlineTimer); safeEnd(); res.redirect('/uploads'); });
+      return req.session.save(() => { clearTimeout(deadlineTimer); safeEnd(); res.redirect(backUrl); });
     }
     if (!req.file) {
       systemLogger.warn('Upload attempt with no file', { user: req.user?.username, ip: req.ip });
       req.flash('error', 'Please select a file to upload.');
     } else {
-      auditLogger.info('FILE_UPLOADED', { filename: req.file.originalname, storedAs: req.file.filename, sizeBytes: req.file.size, uploadedBy: req.user.username, ip: req.ip });
+      const index = readUploadsIndex();
+      const now = new Date().toISOString();
+      index.uploads.push({
+        storedName: req.file.filename,
+        originalName: req.file.originalname,
+        sizeBytes: req.file.size,
+        folderPath,
+        uploadedBy: req.user.username,
+        uploadedAt: now,
+        updatedAt: now
+      });
+      writeUploadsIndex(index);
+      auditLogger.info('FILE_UPLOADED', {
+        filename: req.file.originalname,
+        storedAs: req.file.filename,
+        sizeBytes: req.file.size,
+        folderPath,
+        uploadedBy: req.user.username,
+        ip: req.ip
+      });
       req.flash('success', `"${req.file.originalname}" uploaded successfully.`);
     }
-    // Explicitly save session before redirect to prevent Windows race-condition
-    // that drops the flash message and causes ERR_FAILED
     req.session.save(saveErr => {
       if (saveErr) systemLogger.warn('Session save failed after upload', { error: saveErr.message });
       clearTimeout(deadlineTimer); safeEnd();
-      res.redirect('/uploads');
+      res.redirect(backUrl);
     });
   } catch (err) {
     systemLogger.error('Upload failed', { error: err.message, user: req.user?.username, ip: req.ip });
     req.flash('error', err.message || 'Upload failed. Please try again.');
+    let folderPath = '';
+    try { folderPath = normalizeAndValidateFolderPath((req.body && req.body.folderPath) || ''); } catch {}
+    const backUrl = '/uploads' + (folderPath ? '?path=' + encodeURIComponent(folderPath) : '');
+    req.session.save(() => { clearTimeout(deadlineTimer); safeEnd(); res.redirect(backUrl); });
+  }
+});
+
+// ─── Legacy flat POST /uploads aliased to /uploads/upload (T4 compat) ─────────
+app.post('/uploads', ensureRole('editor'), async (req, res, next) => {
+  const UPLOAD_TIMEOUT_MS = 45 * 1000;
+  let responded = false;
+  const safeEnd = () => { if (responded) return; responded = true; };
+  const deadlineTimer = setTimeout(() => {
+    if (responded) return;
+    responded = true;
+    systemLogger.error('Upload handler timed out', { user: req.user?.username, ip: req.ip });
+    try { req.flash('error', 'Upload timed out.'); } catch {}
+    try {
+      req.session.save(() => {
+        try { res.status(408); if (!res.headersSent) res.redirect('/uploads'); else res.end(); }
+        catch { try { res.status(500).type('text/plain').send('Upload timed out.'); } catch {} }
+      });
+    } catch {
+      try { res.status(500).type('text/plain').send('Upload timed out.'); } catch {}
+    }
+  }, UPLOAD_TIMEOUT_MS);
+  const _origEnd = res.end.bind(res);
+  res.end = function patchedEnd(...a) { clearTimeout(deadlineTimer); safeEnd(); return _origEnd(...a); };
+  const _origRedirect = res.redirect.bind(res);
+  res.redirect = function patchedRedirect(...a) { clearTimeout(deadlineTimer); safeEnd(); return _origRedirect(...a); };
+
+  try {
+    await runMulterUploadDynamic(req, res);
+    if (responded) return;
+    const csrfPassed = verifyCsrfConstantTime(req);
+    let folderPath = '';
+    try { folderPath = normalizeAndValidateFolderPath((req.body && req.body.folderPath) || ''); } catch {}
+    const backUrl = '/uploads' + (folderPath ? '?path=' + encodeURIComponent(folderPath) : '');
+    if (!csrfPassed) {
+      req.flash('error', 'Upload rejected: invalid or missing CSRF token. Please refresh and try again.');
+      return req.session.save(() => { clearTimeout(deadlineTimer); safeEnd(); res.redirect(backUrl); });
+    }
+    if (!req.file) {
+      req.flash('error', 'Please select a file to upload.');
+    } else {
+      const index = readUploadsIndex();
+      const now = new Date().toISOString();
+      index.uploads.push({
+        storedName: req.file.filename,
+        originalName: req.file.originalname,
+        sizeBytes: req.file.size,
+        folderPath,
+        uploadedBy: req.user.username,
+        uploadedAt: now,
+        updatedAt: now
+      });
+      writeUploadsIndex(index);
+      auditLogger.info('FILE_UPLOADED', {
+        filename: req.file.originalname, storedAs: req.file.filename,
+        sizeBytes: req.file.size, folderPath, uploadedBy: req.user.username, ip: req.ip
+      });
+      req.flash('success', `"${req.file.originalname}" uploaded successfully.`);
+    }
+    req.session.save(saveErr => {
+      if (saveErr) systemLogger.warn('Session save failed after upload', { error: saveErr.message });
+      clearTimeout(deadlineTimer); safeEnd();
+      res.redirect(backUrl);
+    });
+  } catch (err) {
+    systemLogger.error('Upload failed', { error: err.message, user: req.user?.username, ip: req.ip });
+    req.flash('error', err.message || 'Upload failed.');
     req.session.save(() => { clearTimeout(deadlineTimer); safeEnd(); res.redirect('/uploads'); });
   }
 });
 
-app.get('/uploads/download/:filename', ensureAuth, (req, res) => {
-  const safePath = assertWithinBaseDir(req.params.filename, UPLOADS_DIR);
-  if (!safePath || !fs.existsSync(safePath)) {
-    return res.status(404).render('error', {
-      title: '404', statusCode: 404,
-      user:     res.locals.user     || null,
-      flash:    res.locals.flash    || { error: [], success: [], info: [] },
-      navFlat:  res.locals.navFlat  || [],
-      navPages: res.locals.navPages || [],
-      csrfToken: res.locals.csrfToken || '',
-      message: 'File not found.'
+// ─── T6: GET /uploads listing with ?path= ─────────────────────────────────────
+app.get('/uploads', ensureAuth, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
+  try {
+    const currentFolderPath = normalizeAndValidateFolderPath(req.query.path || '');
+    const resolvedDir = currentFolderPath
+      ? assertWithinBaseDir(path.join(UPLOADS_BASE_DIR, currentFolderPath), UPLOADS_BASE_DIR)
+      : UPLOADS_BASE_DIR;
+    if (!resolvedDir) {
+      req.flash('error', 'Invalid folder path.');
+      return req.session.save(() => res.redirect('/uploads'));
+    }
+    if (!fs.existsSync(resolvedDir)) {
+      req.flash('error', 'Folder not found.');
+      return req.session.save(() => res.redirect('/uploads'));
+    }
+    const breadcrumb = _uploadsBreadcrumb(currentFolderPath);
+    const entries = await fs.promises.readdir(resolvedDir, { withFileTypes: true });
+    const index = readUploadsIndex();
+    const recordsInFolder = new Map();
+    for (const rec of index.uploads) {
+      if (rec.folderPath === currentFolderPath) recordsInFolder.set(rec.storedName.toLowerCase(), rec);
+    }
+    const subfolders = [];
+    const files = [];
+    for (const ent of entries) {
+      if (ent.name.startsWith('.')) continue;
+      if (SYNCTHING_CONFLICT_RE.test(ent.name)) continue;
+      if (ent.isDirectory()) {
+        subfolders.push({ name: ent.name, rel: currentFolderPath ? currentFolderPath + '/' + ent.name : ent.name });
+      } else if (ent.isFile()) {
+        const rec = recordsInFolder.get(ent.name.toLowerCase());
+        const fullPath = path.join(resolvedDir, ent.name);
+        let stat;
+        try { stat = fs.statSync(fullPath); } catch { stat = { size: 0, birthtime: new Date() }; }
+        const orphan = !rec;
+        files.push({
+          storedName: ent.name,
+          originalName: rec ? rec.originalName : ent.name.replace(/^\d+_/, ''),
+          size: formatBytes(stat.size || 0),
+          sizeRaw: stat.size || 0,
+          uploadedAt: rec ? (rec.uploadedAt || stat.birthtime.toISOString()) : stat.birthtime.toISOString(),
+          icon: fileIcon(ent.name),
+          ext: path.extname(ent.name).toLowerCase(),
+          relPath: currentFolderPath ? currentFolderPath + '/' + ent.name : ent.name,
+          orphan,
+          uploadedBy: rec ? rec.uploadedBy || '' : ''
+        });
+      }
+    }
+    subfolders.sort((a, b) => a.name.localeCompare(b.name));
+    files.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+
+    const matchedDiskSet = new Set();
+    for (const f of files) matchedDiskSet.add(f.storedName.toLowerCase());
+    const danglingRecords = [];
+    for (const rec of recordsInFolder.values()) {
+      if (matchedDiskSet.has(rec.storedName.toLowerCase())) continue;
+      danglingRecords.push({
+        storedName: rec.storedName,
+        originalName: rec.originalName || rec.storedName.replace(/^\d+_/, ''),
+        size: '—',
+        sizeRaw: 0,
+        uploadedAt: rec.updatedAt || rec.uploadedAt || new Date().toISOString(),
+        icon: fileIcon(rec.storedName),
+        ext: path.extname(rec.storedName).toLowerCase(),
+        relPath: currentFolderPath ? currentFolderPath + '/' + rec.storedName : rec.storedName,
+        orphan: false,
+        recordMissing: true,
+        uploadedBy: rec.uploadedBy || ''
+      });
+    }
+    danglingRecords.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+
+    const orphanFileCount  = files.filter(f => f.orphan).length;
+    const danglingCount    = danglingRecords.length;
+
+    res.render('uploads', {
+      title: 'Documents — OnlineWiki',
+      currentFolderPath,
+      breadcrumb,
+      subfolders,
+      files,
+      danglingRecords,
+      orphanFileCount,
+      danglingRecordCount: danglingCount,
+      csrfToken: res.locals.csrfToken
     });
+  } catch (err) {
+    systemLogger.warn('uploads listing failed', { error: err.message, user: req.user?.username, ip: req.ip });
+    req.flash('error', err.message || 'Failed to load listing.');
+    req.session.save(() => res.redirect('/'));
   }
-  const friendlyName = req.params.filename.replace(/^\d+_/, '');
-  res.download(safePath, friendlyName);
 });
 
-app.post('/uploads/delete/:filename', ensureRole('editor'), (req, res) => {
-  const safePath = assertWithinBaseDir(req.params.filename, UPLOADS_DIR);
-  if (safePath && fs.existsSync(safePath)) {
+// ─── T7: POST /uploads/files/move (atomic batch move) ─────────────────────────
+app.post('/uploads/files/move', ensureRole('editor'), async (req, res) => {
+  try {
+    const destPath = normalizeAndValidateFolderPath(req.body.destinationPath || '');
+    const destResolved = destPath
+      ? assertWithinBaseDir(path.join(UPLOADS_BASE_DIR, destPath), UPLOADS_BASE_DIR)
+      : UPLOADS_BASE_DIR;
+    if (!destResolved) {
+      req.flash('error', 'Invalid destination folder.');
+      return req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+    }
+    if (destPath && !fs.existsSync(destResolved)) {
+      req.flash('error', 'Destination folder does not exist.');
+      return req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+    }
+    let relFilePaths = Array.isArray(req.body.files) ? req.body.files.filter(x => typeof x === 'string') :
+                       typeof req.body.files === 'string' ? [req.body.files] : [];
+    relFilePaths = relFilePaths.slice(0, 500);
+    if (relFilePaths.length === 0) {
+      req.flash('error', 'No files selected to move.');
+      return req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+    }
+    // ─── Phase 1: RAM validation ─────────────────────────────────────────────
+    const index = readUploadsIndex();
+    const ops = [];
+    const destEntries = destResolved && fs.existsSync(destResolved)
+      ? (await fs.promises.readdir(destResolved)).map(n => n.toLowerCase())
+      : [];
+    const destSet = new Set(destEntries);
+    for (const rel of relFilePaths) {
+      const relNorm = String(rel).replace(/\\/g, '/').replace(/^\/+/, '');
+      if (!relNorm) continue;
+      const srcResolved = assertWithinBaseDir(path.join(UPLOADS_BASE_DIR, relNorm), UPLOADS_BASE_DIR);
+      if (!srcResolved || !fs.existsSync(srcResolved) || !fs.statSync(srcResolved).isFile()) {
+        req.flash('error', `File not found: ${path.basename(relNorm)}`);
+        return req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+      }
+      const basename = path.basename(relNorm);
+      const srcFolder = relNorm.includes('/') ? relNorm.slice(0, relNorm.lastIndexOf('/')) : '';
+      try {
+        if (srcFolder) normalizeAndValidateFolderPath(srcFolder);
+      } catch {
+        req.flash('error', `Invalid source path for "${basename}".`);
+        return req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+      }
+      // self-move / same-folder guard
+      if (srcFolder === destPath) {
+        req.flash('error', `"${basename}" is already in the destination folder.`);
+        return req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+      }
+      // descendant-of-destination guard (cycle)
+      if (destPath && (srcFolder === destPath || srcFolder.startsWith(destPath + '/'))) {
+        req.flash('error', `Cannot move "${basename}" into its own subfolder.`);
+        return req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+      }
+      const baseLow = basename.toLowerCase();
+      if (destSet.has(baseLow)) {
+        return res.status(409).render('error', {
+          title: '409 Conflict', statusCode: 409,
+          user: res.locals.user || null, flash: res.locals.flash || { error: [`A file named "${basename}" already exists in the destination folder. No files were moved.`], success: [], info: [] },
+          navFlat: res.locals.navFlat || [], navPages: res.locals.navPages || [],
+          csrfToken: res.locals.csrfToken || '',
+          message: `A file named "${basename}" already exists in the destination folder. No files were moved.`
+        });
+      }
+      destSet.add(baseLow);
+      const record = index.uploads.find(r => {
+        const recFull = r.folderPath ? r.folderPath + '/' + r.storedName : r.storedName;
+        return recFull === relNorm;
+      }) || null;
+      ops.push({ relNorm, basename, srcFolder, srcResolved, destResolved, record });
+    }
+    // ─── Phase 2: Apply renames with rollback ────────────────────────────────
+    const applied = [];
+    try {
+      for (const op of ops) {
+        const dstFile = path.join(op.destResolved, op.basename);
+        await fs.promises.rename(op.srcResolved, dstFile);
+        applied.push({ op, dstFile });
+        if (op.record) {
+          op.record.folderPath = destPath;
+          op.record.updatedAt = new Date().toISOString();
+        }
+      }
+      writeUploadsIndex(index);
+    } catch (moveErr) {
+      // Best-effort rollback in reverse order
+      for (let i = applied.length - 1; i >= 0; i--) {
+        try {
+          const { op, dstFile } = applied[i];
+          await fs.promises.rename(dstFile, op.srcResolved);
+          if (op.record) op.record.folderPath = op.srcFolder;
+        } catch (rollErr) {
+          systemLogger.error('FILE_MOVE rollback failed', { error: rollErr.message, file: applied[i].op.basename });
+        }
+      }
+      systemLogger.warn('batch move aborted', { error: moveErr.message, applied: applied.length, total: ops.length });
+      req.flash('error', `Move failed: ${moveErr.message}. No files were moved.`);
+      return req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+    }
+    // ─── Phase 3: Audit each moved file ──────────────────────────────────────
+    const now = new Date().toISOString();
+    for (const op of ops) {
+      auditLogger.info('FILE_MOVED', {
+        storedAs: op.basename,
+        originalName: op.record ? op.record.originalName : op.basename,
+        sourceFolder: op.srcFolder,
+        destinationFolder: destPath,
+        movedBy: req.user.username,
+        ip: req.ip
+      });
+    }
+    req.flash('success', `${ops.length} file${ops.length !== 1 ? 's' : ''} moved successfully.`);
+    req.session.save(() => res.redirect('/uploads' + (destPath ? '?path=' + encodeURIComponent(destPath) : '')));
+  } catch (err) {
+    systemLogger.warn('batch move failed', { error: err.message, user: req.user?.username, ip: req.ip });
+    req.flash('error', err.message || 'Failed to move files.');
+    req.session.save(() => res.redirect(_uploadsRedirectBack(req)));
+  }
+});
+
+// ─── File delete (wildcard, supports nested folder paths) ────────────────────
+app.post('/uploads/delete/*', ensureRole('editor'), (req, res) => {
+  const relRaw = typeof req.params[0] === 'string' ? decodeURIComponent(req.params[0]) : '';
+  const relPath = relRaw.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!relPath) {
+    req.flash('error', 'No file specified.');
+    return req.session.save(() => res.redirect('/uploads'));
+  }
+  const safePath = assertWithinBaseDir(relPath, UPLOADS_DIR);
+  if (safePath && fs.existsSync(safePath) && fs.statSync(safePath).isFile()) {
     fs.removeSync(safePath);
-    // Cascade-remove from all page attachment lists
     listPages().forEach(p => {
-      if ((p.attachments || []).includes(req.params.filename)) {
-        p.attachments = p.attachments.filter(f => f !== req.params.filename);
+      if ((p.attachments || []).includes(relPath) || (p.attachments || []).includes(path.basename(relPath))) {
+        p.attachments = p.attachments.filter(f => f !== relPath && f !== path.basename(relPath));
         savePage(p);
       }
     });
   }
-  auditLogger.info('FILE_DELETED', { filename: req.params.filename, deletedBy: req.user.username, ip: req.ip });
+  // Resolve { folderPath, storedName } pair from the full slashed path for
+  // correct uploads.json index removal regardless of nesting depth.
+  const lastSlash = relPath.lastIndexOf('/');
+  const delFolderPath = lastSlash >= 0 ? relPath.slice(0, lastSlash) : '';
+  const delStoredName = lastSlash >= 0 ? relPath.slice(lastSlash + 1) : relPath;
+  const index = readUploadsIndex();
+  const idx = index.uploads.findIndex(r => {
+    const recFolder = r.folderPath || '';
+    return recFolder === delFolderPath && r.storedName === delStoredName;
+  });
+  let filenameForAudit = delStoredName;
+  if (idx >= 0) {
+    const [removed] = index.uploads.splice(idx, 1);
+    filenameForAudit = removed.originalName || removed.storedName;
+    auditLogger.info('FILE_DELETED', {
+      filename: filenameForAudit,
+      storedName: removed.storedName,
+      folderPath: delFolderPath,
+      deletedBy: req.user.username,
+      ip: req.ip
+    });
+  } else {
+    auditLogger.info('FILE_DELETED', {
+      filename: relPath,
+      folderPath: delFolderPath,
+      note: 'no matching uploads.json record (orphan file delete)',
+      deletedBy: req.user.username,
+      ip: req.ip
+    });
+  }
+  writeUploadsIndex(index);
   req.flash('success', 'File deleted.');
-  // Explicit session save before redirect — on Windows session-file-store
-  // can race and drop the flash if we redirect before the write completes.
+  const back = typeof req.body.redirect === 'string' && req.body.redirect.startsWith('/') && !req.body.redirect.startsWith('//')
+    ? req.body.redirect : '/uploads' + (delFolderPath ? '?path=' + encodeURIComponent(delFolderPath) : '');
   req.session.save(saveErr => {
     if (saveErr) systemLogger.warn('Session save failed after delete', { error: saveErr.message });
-    res.redirect('/uploads');
+    res.redirect(back);
   });
 });
 
-// ─── Static serve of uploaded files (images/pdf etc.) ─────────────────────────
-// Mount AFTER all specific /uploads/* routes (/download, /delete, GET/POST /uploads)
-// so those always take precedence. Require auth + belt+braces path containment.
-app.use('/uploads', ensureAuth, function (req, res, next) {
-  const safe = assertWithinBaseDir(req.path.replace(/^\//, ''), UPLOADS_DIR);
+// ─── Orphan: POST /uploads/adopt/* (create index record for orphan file) ──────
+app.post('/uploads/adopt/*', ensureRole('editor'), (req, res) => {
+  const relRaw = typeof req.params[0] === 'string' ? decodeURIComponent(req.params[0]) : '';
+  const relPath = relRaw.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!relPath) {
+    req.flash('error', 'No file specified.');
+    return req.session.save(() => res.redirect('/uploads'));
+  }
+  const safeDiskPath = assertWithinBaseDir(relPath, UPLOADS_DIR);
+  if (!safeDiskPath || !fs.existsSync(safeDiskPath) || !fs.statSync(safeDiskPath).isFile()) {
+    req.flash('error', 'Orphan file not found on disk.');
+    return req.session.save(() => res.redirect('/uploads'));
+  }
+  const lastSlash = relPath.lastIndexOf('/');
+  const adoptFolder = lastSlash >= 0 ? relPath.slice(0, lastSlash) : '';
+  const adoptStored = lastSlash >= 0 ? relPath.slice(lastSlash + 1) : relPath;
+  try { normalizeAndValidateFolderPath(adoptFolder); } catch (e) {
+    req.flash('error', e.message || 'Invalid folder path.');
+    return req.session.save(() => res.redirect('/uploads'));
+  }
+  const index = readUploadsIndex();
+  const exists = index.uploads.some(r =>
+    (r.folderPath || '') === adoptFolder && r.storedName === adoptStored);
+  if (exists) {
+    req.flash('info', 'Record already exists for this file.');
+    return req.session.save(() => res.redirect('/uploads' + (adoptFolder ? '?path=' + encodeURIComponent(adoptFolder) : '')));
+  }
+  let stat;
+  try { stat = fs.statSync(safeDiskPath); } catch { stat = { size: 0, birthtime: new Date() }; }
+  const newRec = {
+    storedName: adoptStored,
+    folderPath: adoptFolder,
+    originalName: adoptStored.replace(/^\d+_/, ''),
+    sizeRaw: stat.size || 0,
+    uploadedAt: stat.birthtime ? (stat.birthtime.toISOString ? stat.birthtime.toISOString() : new Date(stat.birthtime).toISOString()) : new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    uploadedBy: req.user ? req.user.username : ''
+  };
+  index.uploads.push(newRec);
+  writeUploadsIndex(index);
+  auditLogger.info('FILE_ADOPTED', {
+    filename: newRec.originalName,
+    storedName: adoptStored,
+    folderPath: adoptFolder,
+    adoptedBy: req.user.username,
+    ip: req.ip
+  });
+  req.flash('success', 'File adopted into uploads index.');
+  const back = typeof req.body.redirect === 'string' && req.body.redirect.startsWith('/') && !req.body.redirect.startsWith('//')
+    ? req.body.redirect : '/uploads' + (adoptFolder ? '?path=' + encodeURIComponent(adoptFolder) : '');
+  req.session.save(() => res.redirect(back));
+});
+
+// ─── Orphan: POST /uploads/adopt-all (batch adopt orphans in folder) ─────────
+app.post('/uploads/adopt-all', ensureRole('editor'), (req, res) => {
+  let scopePath = '';
+  try { scopePath = normalizeAndValidateFolderPath(req.body.path || ''); } catch (e) {
+    req.flash('error', e.message || 'Invalid folder path.');
+    return req.session.save(() => res.redirect('/uploads'));
+  }
+  const inventory = buildOrphanInventory(scopePath || null);
+  if (inventory.orphanFileCount === 0) {
+    req.flash('info', 'No orphan files found in this folder.');
+    return req.session.save(() => res.redirect('/uploads' + (scopePath ? '?path=' + encodeURIComponent(scopePath) : '')));
+  }
+  const index = readUploadsIndex();
+  let adopted = 0;
+  const now = new Date().toISOString();
+  for (const orphan of inventory.orphanFiles) {
+    const dup = index.uploads.some(r =>
+      (r.folderPath || '') === orphan.folderPath && r.storedName === orphan.storedName);
+    if (dup) continue;
+    index.uploads.push({
+      storedName: orphan.storedName,
+      folderPath: orphan.folderPath,
+      originalName: orphan.originalName,
+      sizeRaw: orphan.sizeRaw || 0,
+      uploadedAt: orphan.uploadedAt || now,
+      updatedAt: now,
+      uploadedBy: req.user ? req.user.username : ''
+    });
+    adopted++;
+  }
+  if (adopted > 0) writeUploadsIndex(index);
+  auditLogger.info('ORPHAN_BATCH_ADOPTED', {
+    scopeFolder: scopePath || '(root)',
+    count: adopted,
+    by: req.user.username,
+    ip: req.ip
+  });
+  req.flash('success', `Adopted ${adopted} orphan file${adopted !== 1 ? 's' : ''} into the index.`);
+  const back = typeof req.body.redirect === 'string' && req.body.redirect.startsWith('/') && !req.body.redirect.startsWith('//')
+    ? req.body.redirect : '/uploads' + (scopePath ? '?path=' + encodeURIComponent(scopePath) : '');
+  req.session.save(() => res.redirect(back));
+});
+
+// ─── Dangling record: POST /uploads/dangling/remove (single record) ───────────
+app.post('/uploads/dangling/remove', ensureRole('editor'), (req, res) => {
+  const relRaw = typeof req.body.relPath === 'string' ? req.body.relPath : '';
+  const relPath = relRaw.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!relPath) {
+    req.flash('error', 'No record specified.');
+    return req.session.save(() => res.redirect('/uploads'));
+  }
+  const lastSlash = relPath.lastIndexOf('/');
+  const recFolder = lastSlash >= 0 ? relPath.slice(0, lastSlash) : '';
+  const recStored = lastSlash >= 0 ? relPath.slice(lastSlash + 1) : relPath;
+  try { normalizeAndValidateFolderPath(recFolder); } catch (e) {
+    req.flash('error', e.message || 'Invalid folder path.');
+    return req.session.save(() => res.redirect('/uploads'));
+  }
+  const index = readUploadsIndex();
+  const idx = index.uploads.findIndex(r =>
+    (r.folderPath || '') === recFolder && r.storedName === recStored);
+  let removedName = recStored;
+  if (idx >= 0) {
+    const [removed] = index.uploads.splice(idx, 1);
+    removedName = removed.originalName || removed.storedName;
+    writeUploadsIndex(index);
+    auditLogger.info('DANGLING_RECORD_REMOVED', {
+      filename: removedName,
+      storedName: removed.storedName,
+      folderPath: recFolder,
+      removedBy: req.user.username,
+      ip: req.ip
+    });
+    listPages().forEach(p => {
+      if ((p.attachments || []).includes(relPath) || (p.attachments || []).includes(recStored)) {
+        p.attachments = p.attachments.filter(f => f !== relPath && f !== recStored);
+        savePage(p);
+      }
+    });
+  }
+  req.flash('success', 'Dangling upload record removed.');
+  const back = typeof req.body.redirect === 'string' && req.body.redirect.startsWith('/') && !req.body.redirect.startsWith('//')
+    ? req.body.redirect : '/uploads' + (recFolder ? '?path=' + encodeURIComponent(recFolder) : '');
+  req.session.save(() => res.redirect(back));
+});
+
+// ─── Dangling record: POST /uploads/dangling/prune (batch) ────────────────────
+app.post('/uploads/dangling/prune', ensureRole('editor'), (req, res) => {
+  let scopePath;
+  const bodyPath = typeof req.body.path === 'string' ? req.body.path : '';
+  try {
+    scopePath = bodyPath === '(global)' || bodyPath === '__global__' || bodyPath === ''
+      ? null
+      : normalizeAndValidateFolderPath(bodyPath);
+  } catch (e) {
+    req.flash('error', e.message || 'Invalid folder path.');
+    return req.session.save(() => res.redirect('/uploads'));
+  }
+  const inventory = buildOrphanInventory(scopePath === null ? undefined : scopePath);
+  if (inventory.danglingRecordCount === 0) {
+    req.flash('info', scopePath === null ? 'No dangling records found globally.' : 'No dangling records in this folder.');
+    return req.session.save(() => res.redirect('/uploads' + (scopePath ? '?path=' + encodeURIComponent(scopePath) : '')));
+  }
+  const index = readUploadsIndex();
+  const removeKeys = new Set(inventory.danglingRecords.map(r =>
+    `${r.folderPath || ''}//${r.storedName}`.toLowerCase()));
+  const before = index.uploads.length;
+  index.uploads = index.uploads.filter(rec => {
+    const key = `${rec.folderPath || ''}//${rec.storedName}`.toLowerCase();
+    return !removeKeys.has(key);
+  });
+  const pruned = before - index.uploads.length;
+  if (pruned > 0) {
+    writeUploadsIndex(index);
+    const danglingRelPaths = new Set(inventory.danglingRecords.map(r => r.relPath));
+    const danglingStoreds = new Set(inventory.danglingRecords.map(r => r.storedName));
+    listPages().forEach(p => {
+      const before = (p.attachments || []).length;
+      p.attachments = (p.attachments || []).filter(f => !danglingRelPaths.has(f) && !danglingStoreds.has(f));
+      if (p.attachments.length !== before) savePage(p);
+    });
+  }
+  auditLogger.info('DANGLING_BATCH_PRUNED', {
+    scope: scopePath === null ? '(global)' : scopePath || '(root)',
+    count: pruned,
+    by: req.user.username,
+    ip: req.ip
+  });
+  req.flash('success', `Pruned ${pruned} dangling upload record${pruned !== 1 ? 's' : ''}.`);
+  const back = typeof req.body.redirect === 'string' && req.body.redirect.startsWith('/') && !req.body.redirect.startsWith('//')
+    ? req.body.redirect : '/uploads' + (scopePath ? '?path=' + encodeURIComponent(scopePath) : '');
+  req.session.save(() => res.redirect(back));
+});
+
+// ─── Backward-compat: legacy single-segment /uploads/download/:filename ───────
+// Pre-feature routes used this pattern for root-level downloads. Redirect to
+// the new wildcard route with ?download=1 so old bookmarks / TinyMCE image
+// embeds that still carry the old URL pattern do not suddenly 404.
+app.get('/uploads/download/:filename', ensureAuth, (req, res) => {
+  const name = typeof req.params.filename === 'string' ? req.params.filename : '';
+  const safe = assertWithinBaseDir(name, UPLOADS_DIR);
   if (!safe) return res.status(400).type('text/plain').send('Bad request path.');
-  next();
-}, express.static(UPLOADS_DIR, {
-  maxAge: process.env.NODE_ENV === 'production' ? '1d' : 0,
-  immutable: process.env.NODE_ENV === 'production',
-  etag: true,
-  fallthrough: true
-}));
+  const target = '/uploads/' + encodeURIComponent(name) + '?download=1';
+  res.redirect(301, target);
+});
+
+// ─── T5: GET /uploads/* wildcard (legacy download + inline serve) ─────────────
+app.get('/uploads/*', ensureAuth, (req, res, next) => {
+  const rawSub = typeof req.params[0] === 'string' ? decodeURIComponent(req.params[0]) : '';
+  if (!rawSub) return next();
+  const safe = assertWithinBaseDir(rawSub, UPLOADS_DIR);
+  if (!safe) return res.status(400).type('text/plain').send('Bad request path.');
+  if (!fs.existsSync(safe)) {
+    return res.status(404).render('error', {
+      title: '404', statusCode: 404,
+      user: res.locals.user || null, flash: res.locals.flash || { error: [], success: [], info: [] },
+      navFlat: res.locals.navFlat || [], navPages: res.locals.navPages || [],
+      csrfToken: res.locals.csrfToken || '',
+      message: 'File not found.'
+    });
+  }
+  let stat;
+  try { stat = fs.statSync(safe); } catch { return res.status(500).type('text/plain').send('Stat failed.'); }
+  if (stat.isDirectory()) {
+    req.flash('error', 'Cannot download a folder as a file.');
+    return req.session.save(() => res.redirect('/uploads'));
+  }
+  const basename = path.basename(safe);
+  const disp = req.query.download === '1' ? 'attachment' : 'inline';
+  const friendly = basename.replace(/^\d+_/, '');
+  const ext = path.extname(friendly).toLowerCase();
+  if (disp === 'attachment') return res.download(safe, friendly);
+  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(friendly)}"`);
+  const EXT_TO_MIME = {
+    '.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif',
+    '.svg':'image/svg+xml','.webp':'image/webp','.bmp':'image/bmp','.ico':'image/x-icon',
+    '.txt':'text/plain; charset=utf-8','.csv':'text/csv; charset=utf-8',
+    '.md':'text/markdown; charset=utf-8','.json':'application/json; charset=utf-8',
+    '.xml':'application/xml; charset=utf-8','.css':'text/css; charset=utf-8',
+    '.js':'application/javascript; charset=utf-8','.log':'text/plain; charset=utf-8',
+    '.pdf':'application/pdf','.html':'text/html; charset=utf-8','.htm':'text/html; charset=utf-8'
+  };
+  res.setHeader('Content-Type', EXT_TO_MIME[ext] || 'application/octet-stream');
+  res.sendFile(safe, err => { if (err && !res.headersSent) next(err); });
+});
 
 // ─── Admin: user management ───────────────────────────────────────────────────
 app.get('/admin/users', ensureRole('administrator'), (req, res) => {
@@ -2497,9 +3371,234 @@ app.post('/admin/settings', ensureRole('administrator'), (req, res) => {
   res.redirect('/admin/settings');
 });
 
+// ─── Helper: build folder-aware listing for any given folder ──────────────────
+// Returns { currentPath, breadcrumb, subfolders[], files[] } — mirrors SSR listing
+// logic in GET /uploads but works synchronously for JSON API simplicity.
+function listUploadsFolder(targetPath) {
+  const currentFolderPath = normalizeAndValidateFolderPath(targetPath || '');
+  const resolvedDir = currentFolderPath
+    ? assertWithinBaseDir(path.join(UPLOADS_BASE_DIR, currentFolderPath), UPLOADS_BASE_DIR)
+    : UPLOADS_BASE_DIR;
+  if (!resolvedDir || !fs.existsSync(resolvedDir)) {
+    const err = new Error('Folder not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+  const breadcrumb = _uploadsBreadcrumb(currentFolderPath);
+  const entries = fs.readdirSync(resolvedDir, { withFileTypes: true });
+  const index = readUploadsIndex();
+  const recordsInFolder = new Map();
+  for (const rec of index.uploads) {
+    if (rec.folderPath === currentFolderPath) {
+      recordsInFolder.set(rec.storedName.toLowerCase(), rec);
+    }
+  }
+  const subfolders = [];
+  const files = [];
+  for (const ent of entries) {
+    if (ent.name.startsWith('.')) continue;
+    if (SYNCTHING_CONFLICT_RE.test(ent.name)) continue;
+    if (ent.isDirectory()) {
+      subfolders.push({
+        name: ent.name,
+        rel: currentFolderPath ? currentFolderPath + '/' + ent.name : ent.name
+      });
+    } else if (ent.isFile()) {
+      const rec = recordsInFolder.get(ent.name.toLowerCase());
+      const fullPath = path.join(resolvedDir, ent.name);
+      let stat;
+      try { stat = fs.statSync(fullPath); } catch { stat = { size: 0, birthtime: new Date() }; }
+      const orphan = !rec;
+      files.push({
+        storedName: ent.name,
+        name: ent.name,
+        originalName: rec ? rec.originalName : ent.name.replace(/^\d+_/, ''),
+        size: formatBytes(stat.size || 0),
+        sizeRaw: stat.size || 0,
+        uploadedAt: rec ? (rec.uploadedAt || stat.birthtime.toISOString()) : stat.birthtime.toISOString(),
+        icon: fileIcon(ent.name),
+        ext: path.extname(ent.name).toLowerCase(),
+        folderPath: currentFolderPath,
+        relPath: currentFolderPath ? currentFolderPath + '/' + ent.name : ent.name,
+        orphan,
+        uploadedBy: rec ? rec.uploadedBy || '' : ''
+      });
+    }
+  }
+  subfolders.sort((a, b) => a.name.localeCompare(b.name));
+  files.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+
+  const matchedDiskSet = new Set();
+  for (const f of files) matchedDiskSet.add(f.storedName.toLowerCase());
+  const danglingRecords = [];
+  for (const rec of recordsInFolder.values()) {
+    if (matchedDiskSet.has(rec.storedName.toLowerCase())) continue;
+    danglingRecords.push({
+      storedName: rec.storedName,
+      originalName: rec.originalName || rec.storedName.replace(/^\d+_/, ''),
+      size: '—',
+      sizeRaw: 0,
+      uploadedAt: rec.updatedAt || rec.uploadedAt || new Date().toISOString(),
+      icon: fileIcon(rec.storedName),
+      ext: path.extname(rec.storedName).toLowerCase(),
+      folderPath: currentFolderPath,
+      relPath: currentFolderPath ? currentFolderPath + '/' + rec.storedName : rec.storedName,
+      recordMissing: true,
+      orphan: false,
+      uploadedBy: rec.uploadedBy || ''
+    });
+  }
+  danglingRecords.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+
+  return { currentPath: currentFolderPath, breadcrumb, subfolders, files, danglingRecords };
+}
+
+// ─── Helper: build full orphan inventory (both directions, optionally scoped) ─
+function buildOrphanInventory(scopeFolderPath) {
+  const index = readUploadsIndex();
+  const orphanFiles = [];
+  const danglingRecords = [];
+  const scopePath = scopeFolderPath ? normalizeAndValidateFolderPath(scopeFolderPath) : null;
+
+  const diskEntries = new Map();
+  function walk(dir, rel) {
+    const checked = assertWithinBaseDir(dir, UPLOADS_BASE_DIR);
+    if (!checked || !fs.existsSync(checked)) return;
+    const entries = fs.readdirSync(checked, { withFileTypes: true });
+    for (const ent of entries) {
+      if (ent.name.startsWith('.') || SYNCTHING_CONFLICT_RE.test(ent.name)) continue;
+      const abs = path.join(dir, ent.name);
+      const cur = rel ? rel + '/' + ent.name : ent.name;
+      if (ent.isDirectory()) {
+        walk(abs, cur);
+      } else if (ent.isFile()) {
+        const key = cur.toLowerCase();
+        let stat;
+        try { stat = fs.statSync(abs); } catch { stat = { size: 0, birthtime: new Date() }; }
+        diskEntries.set(key, {
+          storedName: ent.name,
+          originalName: ent.name.replace(/^\d+_/, ''),
+          size: formatBytes(stat.size || 0),
+          sizeRaw: stat.size || 0,
+          uploadedAt: stat.birthtime ? (stat.birthtime.toISOString ? stat.birthtime.toISOString() : new Date(stat.birthtime).toISOString()) : new Date().toISOString(),
+          icon: fileIcon(ent.name),
+          ext: path.extname(ent.name).toLowerCase(),
+          folderPath: rel || '',
+          relPath: cur
+        });
+      }
+    }
+  }
+  walk(UPLOADS_BASE_DIR, '');
+
+  const indexByRel = new Map();
+  for (const rec of index.uploads) {
+    const key = rec.folderPath ? (rec.folderPath + '/' + rec.storedName) : rec.storedName;
+    indexByRel.set(key.toLowerCase(), rec);
+  }
+
+  for (const [key, diskEnt] of diskEntries) {
+    if (!indexByRel.has(key)) {
+      if (scopePath !== null && diskEnt.folderPath !== scopePath) continue;
+      orphanFiles.push(Object.assign({}, diskEnt, { orphan: true, recordMissing: false }));
+    }
+  }
+
+  for (const [key, rec] of indexByRel) {
+    if (!diskEntries.has(key)) {
+      if (scopePath !== null && (rec.folderPath || '') !== scopePath) continue;
+      danglingRecords.push({
+        storedName: rec.storedName,
+        originalName: rec.originalName || rec.storedName.replace(/^\d+_/, ''),
+        size: '—',
+        sizeRaw: 0,
+        uploadedAt: rec.updatedAt || rec.uploadedAt || new Date().toISOString(),
+        icon: fileIcon(rec.storedName),
+        ext: path.extname(rec.storedName).toLowerCase(),
+        folderPath: rec.folderPath || '',
+        relPath: (rec.folderPath || '') ? (rec.folderPath + '/' + rec.storedName) : rec.storedName,
+        orphan: false,
+        recordMissing: true,
+        uploadedBy: rec.uploadedBy || ''
+      });
+    }
+  }
+
+  orphanFiles.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+  danglingRecords.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+
+  return {
+    orphanFiles,
+    danglingRecords,
+    orphanFileCount: orphanFiles.length,
+    danglingRecordCount: danglingRecords.length
+  };
+}
+
 // ─── API: upload list for attachment picker ────────────────────────────────────
+// Backward compat: no ?path= → flat ALL-FILES recursive array (old signature used
+// by sidebar attach + legacy clients). With ?path= → { currentPath, breadcrumb,
+// subfolders[], files[] } for folder-aware TinyMCE / insert-media picker.
 app.get('/api/uploads', ensureAuth, (req, res) => {
-  res.json(listUploads());
+  if (typeof req.query.path === 'string') {
+    try {
+      const structured = listUploadsFolder(req.query.path || '');
+      return res.json(structured);
+    } catch (err) {
+      const code = (err && typeof err.statusCode === 'number') ? err.statusCode : 400;
+      return res.status(code).json({ error: err.message || 'Invalid folder.' });
+    }
+  }
+  // Backward-compatible flat recursive list of all files.
+  const all = [];
+  function walk(dir, rel) {
+    const checked = assertWithinBaseDir(dir, UPLOADS_BASE_DIR);
+    if (!checked || !fs.existsSync(checked)) return;
+    const entries = fs.readdirSync(checked, { withFileTypes: true });
+    for (const ent of entries) {
+      if (ent.name.startsWith('.') || SYNCTHING_CONFLICT_RE.test(ent.name)) continue;
+      const abs = path.join(dir, ent.name);
+      const cur = rel ? rel + '/' + ent.name : ent.name;
+      if (ent.isDirectory()) {
+        walk(abs, cur);
+      } else if (ent.isFile()) {
+        let stat;
+        try { stat = fs.statSync(abs); } catch { stat = { size: 0, birthtime: new Date() }; }
+        all.push({
+          name:         ent.name,
+          originalName: ent.name.replace(/^\d+_/, ''),
+          size:         formatBytes(stat.size || 0),
+          sizeRaw:      stat.size || 0,
+          uploadedAt:   stat.birthtime,
+          icon:         fileIcon(ent.name),
+          ext:          path.extname(ent.name).toLowerCase(),
+          folderPath:   rel || '',
+          relPath:      cur,
+          orphan:       false,
+          recordMissing: false
+        });
+      }
+    }
+  }
+  walk(UPLOADS_BASE_DIR, '');
+  const index = readUploadsIndex();
+  const byRel = new Map();
+  for (const rec of index.uploads) {
+    const key = rec.folderPath ? (rec.folderPath + '/' + rec.storedName) : rec.storedName;
+    byRel.set(key.toLowerCase(), rec);
+  }
+  const diskRelSet = new Set();
+  for (const f of all) {
+    diskRelSet.add(f.relPath.toLowerCase());
+    const rec = byRel.get(f.relPath.toLowerCase());
+    if (rec) {
+      f.originalName = rec.originalName || f.originalName;
+    } else {
+      f.orphan = true;
+    }
+  }
+  all.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+  res.json(all);
 });
 
 // ─── Helpers: full-text page search ───────────────────────────────────────────

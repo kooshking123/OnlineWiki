@@ -249,16 +249,24 @@
 
 <!-- ═══ Attachment picker modal ════════════════════════════════════════════ -->
 <div class="modal-overlay hidden" id="attachPickerModal" role="dialog" aria-modal="true" aria-labelledby="attachPickerTitle">
-  <div class="modal modal-wide">
+  <div class="modal modal-wide modal-attach-picker-wide">
     <div class="modal-header">
       <h2 class="modal-title" id="attachPickerTitle">Add Attachment</h2>
       <button class="modal-close-btn" id="closeAttachPicker" aria-label="Close">×</button>
     </div>
-    <div class="modal-search-wrap">
-      <input type="search" id="attachPickerSearch" class="form-input" placeholder="Search uploaded files…" aria-label="Search uploads" />
+    <div class="modal-search-wrap attach-picker-toolbar">
+      <nav id="attachPickerBreadcrumb" class="attach-picker-breadcrumb" aria-label="Folder breadcrumb">
+        <span class="editor-hint">Documents</span>
+      </nav>
+      <input type="search" id="attachPickerSearch" class="form-input attach-picker-search" placeholder="Search in current folder…" aria-label="Search uploads" />
     </div>
-    <div id="attachPickerList" class="attach-picker-list">
-      <p class="editor-hint">Loading…</p>
+    <div class="attach-picker-body">
+      <aside id="attachPickerSidebar" class="attach-picker-sidebar" aria-label="Folder tree">
+        <div class="editor-hint" style="padding:0.5rem 0.75rem">Loading folders…</div>
+      </aside>
+      <div id="attachPickerList" class="attach-picker-list">
+        <p class="editor-hint">Loading…</p>
+      </div>
     </div>
     <div class="modal-footer">
       <a href="/uploads" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" data-tooltip="Open Documents manager in a new tab to upload files.">
