@@ -214,3 +214,64 @@ New action types: `FOLDER_CREATED`, `FOLDER_RENAMED`, `FOLDER_DELETED`, `FILE_MO
 3. **§9.3 No folder move in v1** — **RESOLVED: no folder move in v1 (NG-7 accepted).** Only checkbox-selected files move in v1; folder-move-and-children is explicitly out of scope for v1 and deferred to a future v2 cycle, documented in §3 NG-7.
 4. **§9.4 Folder descriptions / metadata** — **RESOLVED: no folder descriptions, colour coding, starred/bookmarked folders, or per-folder modified-by in v1 (NG-4 accepted).** If needed, scope these as a v2 enhancement; v1 keeps the directory tree minimal and SyncThing-simple.
 5. **§9.5 Max nesting depth** — **RESOLVED: MAX_FOLDER_DEPTH = 8 segments.** Server constant `MAX_FOLDER_DEPTH = 8` is enforced by `normalizeAndValidateFolderPath()` on every normalized POSIX path (create folder, rename folder, upload folderPath, move destinationPath, listing path). Attempts to create 9+ levels fail HTTP 400 with flash "Max folder depth 8 exceeded." This is a single edit point if the team wants to raise the ceiling later.
+
+---
+
+## 10. Post-Spec Extension — Bidirectional Orphan & Dangling Upload Integrity (implemented 2026-09-18)
+
+### 10.1 Why this extension exists
+
+After the folder-hierarchy feature shipped, users and admins introduced files outside the UI (via
+SyncThing replica, `rsync`, Windows Explorer drag-in to `<DATA_DIR>/uploads/`, and direct
+SyncThing conflict-resolution-deletes on replica nodes). Two blind spots emerged:
+
+1. **Type A — Orphan file = disk file with no uploads.json entry.** Page `attachments[]` arrays
+   could never reference it, move toolbar skipped it, audit had no trail, and the old Uploads
+   listing rendered it with `disabled` Delete and zero repair affordance.
+2. **Type B — Dangling record = uploads.json entry with no disk file.** Every page
+   `attachments[]` reference produced a 404, and the uploads index slowly accumulated staleness
+   across SyncThing replicas. Worse: these were **invisible** (the listing cross-ref only
+   disk-files → index, never the inverse).
+
+### 10.2 Functional additions (beyond base spec FR-1 → FR-8)
+
+| Capability | Scope | Server route / client site | Role |
+|---|---|---|---|
+| Bidirectional inventory (Type A + B per folder, or global) | SSR `/uploads` every render, `GET /api/uploads` every structured call, reusable helper `buildOrphanInventory(scopeFolderPath?)` at `server.js:L3241-L3321` | `buildOrphanInventory` walks ALL disk entries into Map (O(N), cold dirs), cross-refs uploads.json; inverse loop iterates records not matched to disk entries via `matchedDiskSet` filter. SSR passes `orphanFileCount` + `danglingRecordCount` + `danglingRecords[]` into EJS. | SSR internal |
+| Transient flags on flat `/api/uploads` picker API | `GET /api/uploads` (default flat mode, backwards-compat) | Each item includes `orphan:false|true` + `recordMissing:false` booleans. `recordMissing=true` entries **never emitted to flat** — server filtered *before serialization*. Client `renderPickerFilesFlat` + `renderPickerFolder` both JS-filter; CSS `.attach-picker-item.is-dangling {display:none}` catch-all. **Triple-lock defence.** | ensureAuth (any role) |
+| Single-row adopt orphan (creates index record from actual `stat`) | Per file row (orange ⚠ "Untracked") | `POST /uploads/adopt/*` wildcard, body carries `storedName`; writes minimal record `{ storedName, originalName=storedName, folderPath=current, mimeType=EXT_TO_MIME, size=stat.size, uploadedBy=req.user.username, uploadedAt=stat.birthtime.toISOString() }`; audit `FILE_ADOPTED` | editor |
+| Batch adopt all orphans in folder | Toolbar "Adopt All" | `POST /uploads/adopt-all` body `{ path }`; loops `buildOrphanInventory(path).orphanFiles[]`; audit `ORPHAN_BATCH_ADOPTED { folderPath, adoptedCount }` | editor |
+| Single-row dangling remove record + attachment clean | Per row (red 🗑 "Dangling") | `POST /uploads/dangling/remove` body `{ relPath }`; deletes index entry + scans every page JSON `attachments[]` with O(1) Set lookup for `storedName` and `folderPath/storedName` composite. audit `DANGLING_RECORD_REMOVED { storedName, folderPath, pagesReferencedCleaned }` | editor |
+| Batch prune dangling records (folder-scoped OR global) | Toolbar "Prune Dangling" OR danger variant "Global Prune Dangling" | `POST /uploads/dangling/prune` body `{ path: "folderPath" \| "__global__" }`; loops dangling records with same attachment Set O(1) cascade. audit `DANGLING_BATCH_PRUNED { scope:"folder"|"global", folderPath?, removedCount, attachmentsCleaned }` | editor |
+| Header count badges + callout banner (zero-state hide) | Uploads page SSR | Subtitle pills: `⚠ N untracked · 🗑️ M dangling`; dual-card `div.card--warn` + `div.card--danger` callout between header + upload dropzone. EJS conditional: `<% if (_hasOrphans || _hasDangling) { %>…<% } %>` — **when both counts = 0, banner is completely removed from rendered DOM** (not CSS-hidden). Batch toolbar buttons disable when no matching records. | SSR |
+| Light/dark theme CSS for badges / pills / rows | Uploads page CSS | Orphan amber: `#f59e0b` pill + row border; dangling red: `#dc2626` pill + row border + card. Verified via MCP screenshot `uploads-light-theme-orphan.png`. | NFR-6 / theme spec §8 |
+
+### 10.3 EJS declaration-order TDZ fix (known-caveat, tracked here because it only appeared when adding orphan callout)
+
+- **Root cause:** Uploads.ejs originally placed the orphan callout banner block at line 33, which
+  referenced `_isEditorOrBetter` via EJS `<% %>` scriplet BEFORE `const _isEditorOrBetter` was
+  declared at the old line 58. EJS compiles template scriplets top-to-bottom; `const/let` have a
+  Temporal Dead Zone. Result: SSR ReferenceError on every `/uploads` render.
+- **Fix:** Moved the entire declaration block (`_userRole → _isEditorOrBetter → _pathQs →
+  _orphanFileCount → _danglingRecordCount → _hasOrphans → _hasDangling`) to lines 29–35
+  **above** the callout open-if block. No code logic change; just ordering.
+- **Why this lives in spec history (not commit message):** the pattern can recur in any future
+  EJS template that adds an SSR-conditional banner block referencing role/lookup variables;
+  declare helpers FIRST then conditionally render.
+
+### 10.4 Verification of orphan extension (2026-09-18)
+
+| Action | Browser MCP E2E evidence | Audit events observed in same-session log |
+|---|---|---|
+| (I) Prune Dangling (folder batch, Engineering) | 1 red 🗑 dangling row removed; badge `🗑️ 1` → `🗑️ 0` in the folder subtitle | `DANGLING_BATCH_PRUNED { scope:"folder", removedCount:1 }` |
+| (II) Adopt single orphan (root level) | ⚠ amber row → normal row: checkbox re-enabled, ⚠ icon + Adopt button disappear, badges 2 → 1 | `FILE_ADOPTED { storedName, folderPath:"", size, uploadedAt }` |
+| (III) Delete orphan file (custom confirm modal flow) | Row gone, file count decrement, ⚠ badge gone | `FILE_DELETED { storedName, folderPath, orphan:true }` |
+| (IV) Remove Record single dangling (root level) | Single red 🗑 row removed, badge `🗑️ 1` → `🗑️ 0`, attachments cascade clean on 1 page | `DANGLING_RECORD_REMOVED { storedName, folderPath:"", pagesReferencedCleaned:1 }` |
+| (V) Adopt All folder batch | All remaining orphans in folder adopted (2 rows), ⚠ badge → 0, batch button disabled | `ORPHAN_BATCH_ADOPTED { folderPath:"Engineering", adoptedCount:2 }` + 3 descendant `FILE_ADOPTED` |
+| (VI) Global Prune Dangling (danger variant, across all folders) | BOTH root + Engineering dangling records removed in one POST, banner fully HIDDEN by EJS `if` (zero state), every batch button disabled | `DANGLING_BATCH_PRUNED { scope:"global", removedCount:2, attachmentsCleaned:0 }` |
+
+Scenario harness re-run (orphan phase extension): **T9 11/11 PASS** (all base uploads-folder scenarios
+still green). Duplicate-save regression re-run same session: **14/14 PASS**. Audit event distinct
+types = **14** (USER_LOGIN, USER_LOGOUT, PAGE_CREATED, PAGE_UPDATED, PAGE_DELETED, FILE_UPLOADED,
+FILE_DELETED, FILES_MOVED, FOLDER_CREATED, FOLDER_RENAMED, FOLDER_DELETED, FILE_ADOPTED,
+ORPHAN_BATCH_ADOPTED, DANGLING_RECORD_REMOVED, DANGLING_BATCH_PRUNED) ≥ 6 required by T9-TR1.

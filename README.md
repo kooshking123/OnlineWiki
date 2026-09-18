@@ -7,15 +7,21 @@ A lightweight, self-hosted internal collaborative wiki.
 - 📝 **WYSIWYG editing** — TinyMCE 7 with light/dark theme skins (oxide / oxide-dark), tables, code blocks, media embed, and more; editor skin and content area match the user's selected UI theme
 - 🔐 **AD/LDAP authentication** — login with Active Directory credentials via `ldapauth-fork`, plus optional local `.env` bootstrap admin account and local-user registry with bcrypt password hashing and role-based access control (reader / editor / administrator)
 - 📁 **Flat-file storage** — pages saved as JSON in `<DATA_DIR>/pages/` (configurable single sync root), no database required; every piece of persistent state lives inside exactly one `DATA_DIR` folder for trivial SyncThing / DFS replication
+- 📂 **Uploads folder hierarchy (up to 8 nested levels)** — Documents area supports physical sub-folders on disk (not virtual metadata). Create/rename/delete folders in-browser; move selected files between folders via toolbar + batch modal; breadcrumb navigation + sidebar tree view in the TinyMCE file picker. SyncThing replicates the real directory tree across servers exactly as it appears on disk.
+- 🗂️ **Folder-aware TinyMCE attachment picker** — Quick Media Insert image/file browser exposes a two-pane layout: (A) sidebar folder tree with untracked count badges + empty-state indicators, (B) main area with breadcrumb, folder-entry cards, file grid, and full-text search. Click a folder to descend, breadcrumb to climb back up; files in nested subfolders are served via URI-encoded per-segment wildcard routes so spaces and special characters resolve correctly.
+- 🚨 **Bidirectional orphan upload detection & repair** — the Documents page continuously scans for **both** integrity failure directions and offers one-click repair:
+  - **Type A (orphan files):** files present on disk but missing from the uploads index → shown with ⚠ amber badge; Adopt (creates index record from stat birthtime/size/uploader) or Delete (permanent disk erase) per-row + **Adopt All** batch toolbar button.
+  - **Type B (dangling records):** entries present in uploads.json but missing from disk → shown with 🗑️ red badge in a dedicated dangling tbody section; hidden from the TinyMCE picker via a triple-lock (server filtered, client JS filtered, CSS display:none); per-row **Remove Record** + **Prune Dangling** folder-scoped + **Global Prune Dangling** (all folders in one click) toolbar buttons, with automatic page attachment array cleanup so pages never reference 404'd deleted uploads.
+  - Header count pills (`⚠ N untracked · 🗑️ M dangling`) always show current totals; zero-state completely hides all orphan callouts and disables batch buttons automatically.
 - 🎨 **Customizable branding** — administrators can upload a custom site logo (PNG / JPEG / WebP / SVG, max 2 MB) from **Settings → Branding**; shown in the sidebar header (top-left) *and* on the unauthenticated login screen; public `/logos/` route serves the logo without requiring auth. Falls back to a books emoji if unset. Site title, tagline, and home heading/subtitle are also editable via the same admin UI
 - 🌗 **Per-user light/dark theme switch** — every authenticated user self-selects a light or dark UI theme (default = light for all new users). Persisted server-side in the user registry (`users.json[].theme`) + fast-path cookie for FOUC-free 1st paint; TinyMCE editor chrome + content area switch skins synchronously. Login screen uses an independent neutral brand theme (not user theme)
 - 🧱 **Hierarchy restructuring** — editors can promote / demote pages (move up/down a level) and reorder pages among siblings via a 4-button cluster on the page viewer. Cycle guards prevent invalid hierarchies; every mutation updates `updatedAt` and writes an audit event. Home cards and "In This Section" children both expose the same inline reorder controls
-- 🛡️ **Duplicate title guard** — saving a page whose title collides with an existing page shows a synchronous confirmation dialog BEFORE the POST is sent. Server-side `confirmDuplicate=true` gating enforces the same guard on the backend so crafted requests cannot bypass the check. Save buttons use `type="button"` + direct `form.submit()` to eliminate browser async-submit races
+- 🛡️ **Duplicate title guard + one-click save parity** — saving a page whose title collides with an *existing different page* shows a synchronous confirmation dialog BEFORE the POST is sent. **The server-side `confirmDuplicate` gate now exactly mirrors the client predicate (`titleActuallyChanged`):** re-renders are skipped when only the body changed, removing the prior "double-click to save" footgun. Save buttons use `type="button"` + TinyMCE `triggerSave()` + 60 ms TinyMCE-skin-reload guard + direct `form.submit()` to eliminate browser async-submit races and editor state staleness.
 - 📎 **Document uploads** — attach PDF, Word, Excel, PowerPoint and other files; download to view; Quick Media Insert sidebar panel in the editor embeds images or links to files inline
-- 👥 **User Management (admins only)** — `/admin/users` UI to create/delete local users, assign roles (reader/editor/administrator), reset passwords, and upload custom profile avatars. Roles gate: readers = view only; editors = create/edit/delete pages + uploads; administrators = user management + site settings
+- 👥 **User Management (admins only)** — `/admin/users` UI to create/delete local users, assign roles (reader/editor/administrator), reset passwords, and upload custom profile avatars. Roles gate: readers = view only; editors = create/edit/delete pages + uploads + folder ops + orphan repair; administrators = user management + site settings
 - ⚙️ **Site Settings (admins only)** — `/admin/settings` single-form configuration of site title, tagline, home heading/subtitle, custom site logo (upload/remove), registration policy, and more. Stored atomically in `data/settings.json` (no database), changeable via CSFR-safe POST with audit logging
-- 🔍 **Live search** — filter pages and uploads instantly in the browser sidebar (client-side, no network round-trip)
-- 🌙 **Modern UI** — glassmorphism neutral-theme login screen, animated collapsible sidebar, responsive layout, custom JS-rendered tooltips (factually concise, positioned above the cursor; blue action buttons intentionally exclude tooltips per UX policy)
+- 🔍 **Live search** — filter pages and uploads (and dangling upload records) instantly in the browser sidebar (client-side, no network round-trip)
+- 🌙 **Modern UI** — glassmorphism neutral-theme login screen, animated collapsible sidebar, responsive layout, custom JS-rendered tooltips (factually concise, positioned above the cursor; blue primary action buttons intentionally exclude tooltips per UX policy)
 
 ---
 
@@ -122,7 +128,22 @@ OnlineWiki/                              ← application code (ships in the Dock
 │   │                         Bare-metal (rel):  data/
 │   │                         Bare-metal (abs):  X:\OnlineWiki-Data  /srv/onlinewiki-data
 │   ├── pages/           Each page is one JSON file:  <slug>.json
-│   ├── uploads/         Binary document uploads + image uploads
+│   ├── uploads/         Physical folder tree (up to 8 nested levels) of binary
+│   │   │                 documents + images.  Directory structure under
+│   │   │                 uploads/ is the authoritative folder hierarchy
+│   │   │                 (not metadata — SyncThing replicates it as-is).
+│   │   ├── Engineering/   Example user-created folder (via New Folder UI)
+│   │   │   ├── Specs/       Sub-folder (files in here are served via the
+│   │   │   └── ...          /uploads/* wildcard — path segments URI-encoded
+│   │   ├── Test/          individually so spaces + Unicode resolve correctly)
+│   │   └── ...
+│   ├── uploads.json      Single authoritative index of uploads metadata:
+│   │                      { version: 1, uploads: [ { storedName, originalName,
+│   │                        folderPath, mimeType, size, uploadedBy, uploadedAt } ] }
+│   │                      Writes atomic (tmp + renameSync), SyncThing-replicated.
+│   │                      Used for orphan detection: ⚠ disk files without a
+│   │                      record are "orphans"; 🗑️ records without a disk file
+│   │                      are "dangling" (see bidirectional integrity repair).
 │   ├── avatars/         Per-user profile pictures (circular PNG/JPG, auth-gated serve route)
 │   ├── logos/           Administrator-uploaded custom site logos (PNG/JPEG/WEBP/SVG, PUBLIC serve route `/logos/` so the unauthenticated login page can render them without a 401. Auto-cleaned on replace/remove)
 │   ├── sessions/        Session files (only *.json are synced; *.tmp / *.lock ignored)
@@ -632,12 +653,53 @@ info: [session] mode=syncthing — <DATA_DIR>/sessions/ MUST be synced by SyncTh
      Uploading, LDAP troubleshooting, sync monitoring.
      ═══════════════════════════════════════════════════════════════════════ -->
 
-## Uploading Documents
+## Uploading Documents & Folder Management
 
-1. Open **Documents** in the sidebar
-2. Drag & drop, or click **Choose File** — supported types: PDF, Word, Excel, PowerPoint, images, ZIP, CSV (max 50 MB per file)
-3. To attach to a page: open the page editor → **Quick Media Insert** sidebar panel → use **Insert Image…** or **Insert Link to File…**
-4. On the page view, attachments are download buttons — files download before opening (no inline Office preview).
+### Upload basics
+
+1. Open **Documents** in the sidebar.
+2. Navigate into any existing sub-folder first (if desired) — new uploads land in whatever folder the breadcrumb shows.
+3. Drag & drop, or click **Choose File** — supported types: PDF, Word, Excel, PowerPoint, images, ZIP, CSV (max 50 MB per file).
+
+### Folder hierarchy (physical directories on disk)
+
+- **New Folder** toolbar button → creates a real physical subdirectory under `<DATA_DIR>/uploads/`.
+- **Rename / Delete** folder (per-row buttons) → same-named filesystem operations; deleting a non-empty folder is rejected server-side (emptied it first).
+- **Move selected files** toolbar button → multi-select checkboxes in the file rows become actionable once ≥1 file selected; modal folder picker + confirm moves files (and their uploads.json records, plus page-attachment path updates) atomically. Cycle guard prevents moving a file into a folder where the exact same storedName already exists.
+- Breadcrumb bar at the top of the Documents main area lets you climb back up any depth level; TinyMCE's attachment picker mirrors the same breadcrumb + folder tree.
+- Up to 8 levels of nesting are enforced server-side via `normalizeAndValidateFolderPath`; attempts to go deeper return a 400 error.
+
+### Integrating uploads into pages (folder-aware picker)
+
+Open any page editor → **Quick Media Insert** sidebar panel. The Insert Image / Insert Link to File dialog now exposes:
+
+- **Sidebar folder tree** (left pane) — click any folder to jump to it directly; tree nodes include `(N)` file-count chips + empty-state indicators for leaf directories that contain no files but do have sub-folders.
+- **Main area (right pane)** — folder-entry cards (click to descend) + file list with thumbnails for images + preview icons for PDFs/docs + per-row insert buttons.
+- Full-text search across both the current folder's files and its sub-folder contents at the top of the dialog.
+- Nested-file download URLs are automatically URI-encoded per path segment so spaces, `&`, `#`, and Unicode characters resolve correctly through the wildcard `/uploads/*` static-serve middleware.
+
+### Orphan & dangling upload integrity repair (editors +)
+
+Every Documents page render performs a **bidirectional 2-way set-diff** between what actually exists on disk and what the uploads index says should exist:
+
+| State | Badge | Root cause | How to repair |
+|---|---|---|---|
+| **Orphan file (disk but no index)** | ⚠ amber "Untracked" | File was added directly to `<DATA_DIR>/uploads/` via SyncThing, rsync, Explorer drag-in, etc. — nothing ever wrote a matching index entry. So page attachments can't reference it, the move modal skips it, and audit logs can't track it. | **Adopt** per-row → creates an uploads.json record using the file's actual `stat.birthtime`, byte size, and the current user as the uploader. Or **Delete** per-row → deletes the disk file permanently (same confirm flow as normal files). Or **Adopt All** toolbar → one POST adopts every orphan in the current folder in a batch. |
+| **Dangling record (index but no disk file)** | 🗑️ red "Dangling" | File was manually deleted from `<DATA_DIR>/uploads/` outside the UI, or a SyncThing conflict resolved to the deleted side; or the page attachment pointed at a file that never fully replicated — leaving a stale 404 pointer in `uploads.json` + potentially in every page `attachments[]` array that references it. | **Remove Record** per-row → deletes the single stale index entry *and* scans every page JSON `attachments[]` array, removing references to the dangling storedName + relPath. Or **Prune Dangling** toolbar → batch removes every dangling record in the current folder with the same attachment cleanup, or click **Global Prune Dangling** (danger variant) to scan *all* folders in one click. |
+
+Counts are always shown next to the Documents subtitle as `⚠ N untracked · 🗑️ M dangling` and a dual-card callout banner renders between the header and the upload dropzone whenever either count > 0. When both hit 0, all badges, the callout, and all batch toolbar buttons auto-disable. Dangling records are **never** shown in the TinyMCE picker — protected by a triple lock (server filtered from the flat API, client JS filtered in both flat and folder render paths, CSS `.attach-picker-item.is-dangling` display:none as a catch-all).
+
+### Audit trail for repair operations
+
+All six repair actions write distinct, searchable audit events to `<LOG_DIR>/audit-YYYY-MM-DD.log`:
+
+| Action | Audit event |
+|---|---|
+| Adopt single orphan | `FILE_ADOPTED` |
+| Adopt All (batch) | `ORPHAN_BATCH_ADOPTED` — includes count of how many records were created |
+| Delete orphan file | `FILE_DELETED` — with `orphan: true` metadata |
+| Remove Record single dangling | `DANGLING_RECORD_REMOVED` — includes storedName + relPath |
+| Prune Dangling / Global Prune Dangling (batch) | `DANGLING_BATCH_PRUNED` — includes count removed + scope |
 
 ## LDAP Troubleshooting
 
@@ -736,7 +798,7 @@ Every hierarchy mutation:
 2. Detects and refuses cycles (e.g. demoting a page into one of its own descendants).
 3. Writes a `PAGE_UPDATED` audit event with `{ hierarchyChanged: true, action: promote\|demote\|up\|down }` to the daily audit log.
 
-### Duplicate-Title Save Guard (for editors / admins)
+### Duplicate-Title Save Guard + one-click save parity (for editors / admins)
 
 When saving a page (new or edit) whose **title** collides with another page (different slug), the following layered guard runs to prevent accidental overwrites:
 
@@ -748,25 +810,86 @@ When saving a page (new or edit) whose **title** collides with another page (dif
 │  click handler does e.preventDefault() then:                       │
 │    1. tinymce.triggerSave() → copies editor content into <textarea>│
 │    2. Builds a duplicate-check request, or uses inline list if     │
-│       available                                                    │
+│       available.  **Duplicate dialog ONLY fires when the title     │
+│       ACTUALLY CHANGED (titleActuallyChanged client check).**      │
+│       Body-only edits skip confirm entirely.                       │
 │    3. window.confirm("Another page already has this title…") —     │
 │       100% synchronous blocking; nothing proceeds until user       │
 │       clicks OK / Cancel                                            │
 │    4. Only if user confirms OK → raw pageForm.submit() (NOT        │
 │       requestSubmit; no submit event fires; no racing listeners)   │
 │       with confirmDuplicate=true embedded in the POST body         │
+│  + TinyMCE-skin reload guard: 60 ms delay before final submit()    │
+│    when theme just changed, because oxide↔oxide-dark cannot hot-   │
+│    swap at runtime.  Eliminates a double-submit false-positive.    │
 ├────────────────────────────────────────────────────────────────────┤
 │  LAYER 2 · Server-side enforcement (server.js POST /pages/save)    │
-│  If the incoming POST has a duplicate title:                       │
-│    a. confirmDuplicate === "true" → save proceeds (user OKed it)   │
-│    b. confirmDuplicate is missing / any other value → the save is  │
-│       REFUSED, and the edit form is RE-RENDERED INLINE (NOT a      │
-│       302 redirect) so the user's entire TinyMCE draft + all form  │
-│       fields are preserved (no data loss) with a flash error.      │
-│  This second layer means hand-crafted POSTs / browser-LANG edits   │
-│  cannot bypass the check even if the client JS is tampered with.   │
+│  **Server mirrors the client predicate EXACTLY:**                  │
+│    i. Compute `titleActuallyChanged` against the persisted page.   │
+│   ii. If the title DID NOT CHANGE (e.g. body-only edit):           │
+│         duplicate guard is SKIPPED ENTIRELY → save is direct,      │
+│         re-render bypassed, ONE CLICK = ONE SAVE.                  │
+│  iii. If title actually collides with a DIFFERENT page slug:       │
+│         a. confirmDuplicate === "true" → save proceeds             │
+│         b. confirmDuplicate missing / any other value → save is    │
+│            REFUSED, edit form re-RENDERED INLINE (not a 302 so the │
+│            user's TinyMCE draft + all form fields are preserved)   │
+│            with flash error.  This parity check eliminates the     │
+│            legacy "must double-click to save" bug that occurred    │
+│            when the server fired duplicate gates on unchanged      │
+│            titles but the client did not.                          │
+│  Tamper guard:  Layer 2 cannot be bypassed even if the client JS   │
+│  is patched, because Layer 2 is the sole arbiter of actual writes. │
 └────────────────────────────────────────────────────────────────────┘
 ```
+
+### Uploads Index Wire Format + page attachment semantics
+
+Each upload gets exactly one entry in `<DATA_DIR>/uploads.json` (a single file, not a per-file metadata). The entire index is read once per request via `readUploadsIndex()` and writes are atomic (`writeUploadsIndex` does write-tmp + `fs.renameSync`). SyncThing replicates `uploads.json` the same way it replicates page JSON files.
+
+Structure of `<DATA_DIR>/uploads.json`:
+
+```json
+{
+  "version": 1,
+  "uploads": [
+    {
+      "storedName": "1788404759251__SA__Chengdu__Chongqing_Duo-Cities.pdf",
+      "originalName": "_SA__Chengdu__Chongqing_Duo-Cities.pdf",
+      "folderPath": "",
+      "mimeType": "application/pdf",
+      "size": 1048576,
+      "uploadedBy": "jdoe",
+      "uploadedAt": "2026-09-03T02:00:00.000Z"
+    },
+    {
+      "storedName": "9999999_orphan-test-file.txt",
+      "originalName": "orphan-test-file.txt",
+      "folderPath": "Engineering",
+      "mimeType": "text/plain",
+      "size": 109,
+      "uploadedBy": "admin",
+      "uploadedAt": "2026-09-18T02:00:00.000Z",
+      "orphan": false,
+      "recordMissing": false
+    }
+  ]
+}
+```
+
+| Field | Required? | Meaning |
+|---|---|---|
+| `storedName` | yes | Basename on disk inside `<DATA_DIR>/uploads/<folderPath>/`. Must be unique within its folder (server rejects colliding move/upload ops). |
+| `originalName` | yes | User-facing name (the filename the client actually chose at upload time). Shown in table Name column, download filename, and picker cards. |
+| `folderPath` | yes | Empty string `""` = root level. Otherwise = `/`-separated *relative* path from `uploads/` with NO leading or trailing slashes (e.g. `"Engineering/Specs"`). |
+| `mimeType` | yes | Detected at upload time; used for `Content-Type` on download. |
+| `size` | yes | Bytes, shown in Size column. |
+| `uploadedBy` | yes | sAMAccountName / local username. Shown in audit + used as default for batch adopt when no other user available. |
+| `uploadedAt` | yes | ISO-8601 UTC timestamp. Adopt operations use the file's real `stat.birthtime`; fresh uploads use `Date.now()` ISO. |
+| `orphan` | no, transient | Transient SSR / API flag: `true` when file exists on disk but no index entry matched. |
+| `recordMissing` | no, transient | Transient SSR / API flag: `true` when index entry exists but `storedName` is missing from disk. **Never emitted to the flat `/api/uploads` picker API.** |
+
+A page's `attachments[]` array (per page JSON, see [Page Storage Wire Format](file:///c:/Users/leeda/OneDrive/Dev/Trae/OnlineWiki/README.md#L280-L316)) stores the raw `storedName` for **root-level files**, and stores `"<folderPath>/<storedName>"` for **nested files**. The view-layer download helper splits on the last `/` to reconstruct the correct route. Prune/Remove dangling-record operations run `listPages()` and filter attachments with O(1) lookups using a `Set()` of both `storedName` and the combined `folderPath + '/' + storedName`, so both flat and nested references are cleaned atomically.
 
 ### Silent Deprecation Warnings (ops note)
 
@@ -900,6 +1023,49 @@ HTTPS_REDIRECT_HTTP=false
 | `SIGINT`  | `Ctrl+C` (any OS terminal) | Graceful close both servers + flush → exit 0 |
 | `SIGTERM` | systemd, Docker stop, kubelet 1.20+ | Same drain as SIGINT → exit 0 |
 | `SIGKILL` | `kill -9` / taskkill /F | Hard kill; last 400 ms of log lines may be lost (never use for normal restarts). |
+
+---
+
+## Audit Event Reference
+
+All mutation operations write a structured JSON audit event to `<LOG_DIR>/audit-YYYY-MM-DD.log` (one event per line, NDJSON, ingestible by Splunk / ELK / Seq / Datadog). Every event has at minimum `{ at, event, by, ip }`. The scenario harness (T9) requires **≥ 6 distinct audit types** — in practice the application currently emits **14 distinct types**, including 4 for orphan upload integrity repair.
+
+| event | Written when | Fields (beyond base) | Role required |
+|---|---|---|---|
+| `USER_LOGIN` | Successful LDAP or local auth | `{ method: "ldap" \| "local" }` | — (login endpoint) |
+| `USER_LOGOUT` | Manual sign-out or idle-time auto-signout | `{ reason: "manual" \| "inactive" }` | authenticated |
+| `USER_CREATED` | Admin creates local user in `/admin/users` | `{ username, role, displayName }` | administrator |
+| `USER_UPDATED` | Admin edits display name / email / role / password reset | `{ username, changed: ["role","password","displayName",...] }` | administrator |
+| `USER_DELETED` | Admin deletes local user | `{ username }` | administrator |
+| `PAGE_CREATED` | New page saved (POST /pages/save with no slug) | `{ slug, title, parent, position }` | editor |
+| `PAGE_UPDATED` | Any page save, title change, slug change, hierarchy mutation | `{ slug, title, parent, position, contentChanged, titleChanged, hierarchyChanged?, action?, confirmDuplicate? }` | editor |
+| `PAGE_DELETED` | Page removed from disk | `{ slug, title, attachmentsDeletedCount }` | editor |
+| `FILE_UPLOADED` | Upload dropzone accepted a file | `{ storedName, originalName, folderPath, size, mimeType }` | editor |
+| `FILE_DELETED` | Single file delete (or orphan file deleted) | `{ storedName, folderPath, orphan: true \| false }` | editor |
+| `FOLDER_CREATED` / `FOLDER_RENAMED` / `FOLDER_DELETED` | Documents folder mutations | `{ folderPath, newName? }` | editor |
+| `FILES_MOVED` | Batch move selected files to a different parent folder | `{ moved: [ { storedName, oldFolder, newFolder }... ], total }` | editor |
+| `SETTINGS_UPDATED` | Admin save in `/admin/settings` (branding, tagline, logo) | `{ changed: ["siteTitle","logo","registrationPolicy",...] }` | administrator |
+| `FILE_ADOPTED` | Per-row adopt of an orphan disk file → creates index record | `{ storedName, folderPath, size, uploadedAt }` | editor |
+| `ORPHAN_BATCH_ADOPTED` | Toolbar Adopt All (folder scoped) | `{ folderPath, adoptedCount }` | editor |
+| `DANGLING_RECORD_REMOVED` | Per-row Remove Record single dangling | `{ storedName, folderPath, pagesReferencedCleaned }` | editor |
+| `DANGLING_BATCH_PRUNED` | Toolbar Prune Dangling (folder) or Global Prune Dangling | `{ scope: "folder" \| "global", folderPath?, removedCount, attachmentsCleaned }` | editor |
+
+Quick grep patterns for on-call triage (Windows PowerShell):
+
+```powershell
+# Today's orphan / dangling repair events
+Get-Content logs\audit-$(Get-Date -Format yyyy-MM-dd).log |
+  Select-String 'FILE_ADOPTED|DANGLING_RECORD_REMOVED|ORPHAN_BATCH|DANGLING_BATCH' |
+  Select-Object -Last 20
+
+# Last 50 saves where title actually changed vs body-only
+Get-Content logs\audit-$(Get-Date -Format yyyy-MM-dd).log |
+  Select-String 'PAGE_UPDATED' |
+  ForEach-Object { $_ -match 'titleChanged":true' } | Select-Object -Last 50
+
+# Failed login attempts today (LDAP or local) — no USER_LOGIN event = no success
+Get-Content logs\audit-$(Get-Date -Format yyyy-MM-dd).log | Select-String 'fail|error|ldap.*bind|auth'
+```
 
 ---
 

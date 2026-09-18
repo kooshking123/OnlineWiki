@@ -115,3 +115,25 @@
 - **Risk: Absolute-positioned child-card actions sit on top of clickable link`. → Mitigation: button forms use `z-index: 2`; but since the actions are outside the `<a>` (sibling, not descendant), they can't absorb the link click. The `<a>` still fills the whole card inside wrap; buttons overlay a tiny corner only, form POSTs, don't bubble click to `<a>`.
 - **Risk: POST after scroll loses list context**. → Mitigation: include anchor in `redirect` field; server echoes it back in the 302 Location. Modern browsers scroll to it.
 - **Risk: Readers bypass UI to hit endpoint**. → Mitigation: endpoint has `ensureRole('editor')` and always did. Verified in prior route audit. Adding redirect param is server-side only so no new auth surface.
+
+---
+
+## Cross-reference to related shipped features (frozen 2026-09-18)
+
+This plan originally focused solely on page-hierarchy reordering. Since its approval, three
+related feature cycles have been completed and verified end-to-end; they extend the tree
+storage and editor-vs-reader role model documented here, and are kept cross-referenced so
+future developers can find them without trawling commit history.
+
+| Feature cycle | Spec + tasks directory | Verified E2E date | Key relation to this plan |
+|---|---|---|---|
+| Uploads folder hierarchy + folder-aware TinyMCE picker | [uploads-folder-hierarchy](../specs/uploads-folder-hierarchy/spec.md) | 2026-09-17 | Extends the "physical dir on disk" SyncThing-friendly storage pattern this plan uses for pages into `<DATA_DIR>/uploads/`; reuses the same editor/admin role gate as `/pages/:slug/move` (ensureRole `editor`); folder-batch `Move selected` modal mirrors the redirect + CSRF pattern this plan documents. |
+| Bidirectional orphan + dangling upload repair (extension of above) | Same spec, §10 Post-Spec Extension | 2026-09-18 | Adds 6 new repair endpoints all behind `ensureRole('editor')`; the same `assertWithinBaseDir` + `normalizeAndValidateFolderPath` primitives centralised for this folder work apply. |
+| Per-user light/dark theme switch + login neutral brand theme | [theme-switch-spec](../specs/theme-switch-spec/spec.md) | 2026-09-16 | All reorder UI documented here (up/down arrows, home footers, child cards) was re-verified on BOTH `html.theme-light` and `html.theme-dark` palettes after the theme feature landed; contrast AA compliant in both (see NFR-6 of uploads spec §10.2 final row). |
+
+All three cycles share the same overall verification baseline documented in the [CHANGELOG.md](../../CHANGELOG.md) (top-of-tree **v0.2.0 Unreleased** entry, dated 2026-09-18):
+
+- Uploads-folders scenario harness `_scenario_uploads_folders.js` — **11 / 11 PASS**
+- Duplicate-save regression harness `test_duplicate_save.js` — **14 / 14 PASS**
+- `node --check server.js` + `node --check public/js/editor.js` — **exit 0 / exit 0**
+- Audit event distinct types ≥ 6 required by T9 — **14 types emitted** actual (incl. `FILE_ADOPTED`, `ORPHAN_BATCH_ADOPTED`, `DANGLING_RECORD_REMOVED`, `DANGLING_BATCH_PRUNED` from the orphan phase extension)
